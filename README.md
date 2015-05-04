@@ -13,9 +13,9 @@ or
 
 options:
 
-    - -o string     set output filename
-    - -V number     set PDF version
-    - -m dimensions set margins
+- -o string     set output filename
+- -V number     set PDF version
+- -m dimensions set margins
  
  The margins are specified as 1-4 numbers with unit (pt if ommited).
  When four values are specified, then they represents top, right,
