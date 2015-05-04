@@ -1,8 +1,20 @@
+//  pngtopdf.cc
+//
+//  This is an adaptation of dvipdfmx PNG support code written by myself.
+//
 
 #ifdef HAVE_CONFIG_H
 #include <config.h>
 #endif
 
+#ifdef _WIN32
+#  define FOPEN_RBIN_MODE "rb"
+#else
+#  define FOPEN_RBIN_MODE "r"
+#endif // _WIN32
+
+// With USE_PHOTOSHOP_GAMMA pngtopdf just assumes gamma value of 2.2
+// when cHRM chunk exists but gAMA does not exist.
 #define USE_PHOTOSHOP_GAMMA
 
 #include <unistd.h>
@@ -11,9 +23,6 @@
 #include <stdlib.h>
 #include <math.h>
 
-#ifndef ABS
-#define ABS(x) ((x) < 0 ? -(x) : (x))
-#endif
 #define ROUND(v,acc) (round(((double)(v))/(acc))*(acc))
 
 #include <sstream>
@@ -22,6 +31,7 @@
 
 
 #include <qpdf/QPDF.hh>
+#include <qpdf/QPDFExc.hh>
 #include <qpdf/QPDFObjectHandle.hh>
 #include <qpdf/QPDFWriter.hh>
 #include <qpdf/QUtil.hh>
@@ -110,7 +120,7 @@ check_for_png (FILE *fp)
     return 1;
 }
 
-static void warn(png_structp png_ptr, png_const_charp msg)
+static void png_warn (png_structp png_ptr, png_const_charp msg)
 {
   (void)png_ptr; /* Make compiler happy */
   std::cerr << msg << std::endl;
@@ -120,7 +130,7 @@ class Margins
 {
 public:
   Margins( float left = 0.0, float right  = 0.0,
-          float top  = 0.0, float bottom = 0.0 );
+           float top  = 0.0, float bottom = 0.0 );
 public:
   float left, right, top, bottom;
 };
@@ -133,16 +143,15 @@ Margins::Margins(float top, float right, float bottom, float left) :
 int
 png_include_image (QPDF& qpdf, std::string filename, Margins margin)
 {
-  png_bytep   stream_data_ptr;
-  int         trans_type;
   png_structp png_ptr;
   png_infop   png_info_ptr;
   png_byte    bpc, color_type;
   png_uint_32 width, height, rowbytes;
-  float       xdensity, ydensity, page_width, page_height;
+  double      xdensity, ydensity, page_width, page_height;
+  int         trans_type;
   FILE       *fp;
 
-  fp = fopen(filename.c_str(), "rb");
+  fp = fopen(filename.c_str(), FOPEN_RBIN_MODE);
   if (!fp) {
     std::cerr << "Could not open file: " << filename << std::endl;
     return -1;
@@ -153,7 +162,7 @@ png_include_image (QPDF& qpdf, std::string filename, Margins margin)
   }
 
   rewind(fp);
-  png_ptr = png_create_read_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, warn);
+  png_ptr = png_create_read_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, png_warn);
   if (png_ptr == NULL ||
       (png_info_ptr = png_create_info_struct(png_ptr)) == NULL) {
     std::cerr << "Creating Libpng read/info struct failed." << std::endl;
@@ -199,7 +208,8 @@ png_include_image (QPDF& qpdf, std::string filename, Margins margin)
     png_set_gamma(png_ptr, 2.2, G);
   }
 
-
+  // png_set_background() called whithin check_transparency
+  // will modify raster image data.
   trans_type = check_transparency(png_ptr, png_info_ptr, qpdf);
   // check_transparency() does not do updata_info()
   png_read_update_info(png_ptr, png_info_ptr);
@@ -242,7 +252,7 @@ png_include_image (QPDF& qpdf, std::string filename, Margins margin)
   image_dict.replaceKey("/ColorSpace", colorspace);
 
   // Read image body
-  stream_data_ptr = new png_byte[rowbytes * height];
+  png_bytep stream_data_ptr = new png_byte[rowbytes * height];
   read_image_data(png_ptr, stream_data_ptr, height, rowbytes);
   // Handle alpha channel
   if (color_type == PNG_COLOR_TYPE_RGB ||
@@ -305,11 +315,11 @@ png_include_image (QPDF& qpdf, std::string filename, Margins margin)
 #if PNG_LIBPNG_VER >= 10614
   if (version >= "1.4") {
     png_textp text_ptr;
-    int       i, num_text;
+    int       num_text;
     int       have_XMP = 0;
 
     num_text = png_get_text(png_ptr, png_info_ptr, &text_ptr, NULL);
-    for (i = 0; i < num_text; i++) {
+    for (int i = 0; i < num_text; i++) {
       if (!memcmp(text_ptr[i].key, "XML:com.adobe.xmp", 17)) {
         /* XMP found */
         if (text_ptr[i].compression != PNG_ITXT_COMPRESSION_NONE ||
@@ -454,7 +464,7 @@ check_transparency (png_structp png_ptr, png_infop info_ptr, QPDF& qpdf)
     // No transparency supported but PNG uses transparency, or Soft-Mask
     // required but no support for it is available in this version of PDF.
     // We must do pre-composition of image with the background image here. But,
-    // we cannot do that in general since dvipdfmx is not a rasterizer. What we
+    // we cannot do that in general since pngtopdf is not a rasterizer. What we
     // can do here is to composite image with a rectangle filled with the
     // background color. However, images are stored as an Image XObject which
     // can be referenced anywhere in the PDF document content. Hence, we cannot
@@ -525,8 +535,8 @@ create_cspace_sRGB (png_structp png_ptr, png_infop info_ptr)
   // Parameters taken from PNG spec. section 4.2.2.3.
   cal_param = make_param_Cal(color_type,
                              2.2,
-			                       0.3127, 0.329,
-			                       0.64, 0.33, 0.3, 0.6, 0.15, 0.06);
+                             0.3127, 0.329,
+                             0.64, 0.33, 0.3, 0.6, 0.15, 0.06);
   if (cal_param.isNull())
     return QPDFObjectHandle::newNull();
 
@@ -603,8 +613,8 @@ create_cspace_CalRGB (png_structp png_ptr, png_infop info_ptr)
 {
   QPDFObjectHandle colorspace;
   QPDFObjectHandle cal_param;
-  double   xw, yw, xr, yr, xg, yg, xb, yb;
-  double   G;
+  double  xw, yw, xr, yr, xg, yg, xb, yb;
+  double  G;
 
   if (!png_get_valid(png_ptr, info_ptr, PNG_INFO_cHRM) ||
       !png_get_cHRM(png_ptr, info_ptr, &xw, &yw, &xr, &yr, &xg, &yg, &xb, &yb))
@@ -651,8 +661,8 @@ create_cspace_CalGray (png_structp png_ptr, png_infop info_ptr)
 {
   QPDFObjectHandle colorspace;
   QPDFObjectHandle cal_param;
-  double   xw, yw, xr, yr, xg, yg, xb, yb;
-  double   G;
+  double  xw, yw, xr, yr, xg, yg, xb, yb;
+  double  G;
 
   if (!png_get_valid(png_ptr, info_ptr, PNG_INFO_cHRM) ||
       !png_get_cHRM(png_ptr, info_ptr, &xw, &yw, &xr, &yr, &xg, &yg, &xb, &yb))
@@ -724,7 +734,7 @@ make_param_Cal (png_byte color_type,
     // Matrix
     det = xr * (yg * zb - zg * yb) -
           xg * (yr * zb - zr * yb) + xb * (yr * zg - zr * yg);
-    if (ABS(det) < 1.0e-10) {
+    if (fabs(det) < 1.0e-10) {
       std::cerr << "Non invertible matrix: "
                    "Maybe invalid value(s) specified in cHRM chunk." <<
                    std::endl;
@@ -1083,24 +1093,34 @@ static void
 read_image_data (png_structp png_ptr, png_bytep dest_ptr,
                  png_uint_32 height, png_uint_32 rowbytes)
 {
-  png_bytepp  rows_p;
-  png_uint_32 i;
-
-  rows_p = new png_bytep[height];
-  for (i = 0; i < height; i++)
+  png_bytepp rows_p = new png_bytep[height];
+  for (png_uint_32 i = 0; i < height; i++)
     rows_p[i] = dest_ptr + (rowbytes * i);
   png_read_image(png_ptr, rows_p);
   delete rows_p;
 }
 
-static void
-print_help (void)
+
+// Main
+static const int EXIT_ERROR = 2;
+static const int EXIT_OK    = 0;
+
+static const char* const usage = "bals!";
+
+static void error_exit (std::string const& msg)
 {
-  std::cerr << "Bals!" << std::endl;
+  if (!msg.empty())
+    std::cerr << msg << std::endl;
+  exit(EXIT_ERROR);
 }
 
-static Margins
-optarg_parse_margins (const char *arg)
+static void warn (std::string const& msg)
+{
+  std::cerr << msg << std::endl;
+}
+
+static int
+optarg_parse_margins (const char *arg, Margins& margin)
 {
   const char *p = arg;
   float v[4] = {0.0, 0.0, 0.0, 0.0};
@@ -1121,8 +1141,7 @@ optarg_parse_margins (const char *arg)
       break;
     default:
       if (strlen(nextp) < 2) {
-        print_help();
-        exit(2);
+        error_exit(usage);
       } else if (!strncmp(nextp, "pt", 2)) {
         p = nextp + 2;
       } else if (!strncmp(nextp, "in", 2)) {
@@ -1135,8 +1154,7 @@ optarg_parse_margins (const char *arg)
         p = nextp + 2;
         unit = 72.0 / 25.4;
       } else {
-        print_help();
-        exit(2);
+        error_exit(usage);
       }
       while (isspace(*p))
         p++;
@@ -1146,8 +1164,7 @@ optarg_parse_margins (const char *arg)
     count++;
   }
   if (p[0] != 0) {
-    print_help();
-    exit(2);
+    error_exit(usage);
   }
   // CSS style margin specification:
   //   4 values: top right bottom left
@@ -1155,8 +1172,7 @@ optarg_parse_margins (const char *arg)
   //   2 values: top-bottom right-left
   //   1 values: top-bottom-right-left
   if (count == 0) {
-    print_help();
-    exit(2);
+    error_exit(usage);
   } else if (count == 1) {
     v[1] = v[2] = v[3] = v[0];
   } else if (count == 2) {
@@ -1165,49 +1181,168 @@ optarg_parse_margins (const char *arg)
   } else if (count == 3) {
     v[3] = v[1];
   }
-  Margins margin = Margins(v[0], v[1], v[2], v[3]);
 
-  return margin;
+  margin.top    = v[0];
+  margin.right  = v[1];
+  margin.bottom = v[2];
+  margin.left   = v[3];
+  return 0;
+}
+
+struct permission
+{
+  enum qpdf_r3_print_e  print;
+  enum qpdf_r3_modify_e modify;
+  bool extract;
+  bool accessibility;
+};
+
+static std::vector<std::string>
+split (const std::string &str, char sep)
+{
+  std::vector<std::string> v;
+  std::stringstream ss(str);
+  std::string buffer;
+
+  while( std::getline(ss, buffer, sep) ) {
+    v.push_back(buffer);
+  }
+
+  return v;
+}
+
+static int
+optarg_parse_permission (const char *arg, struct permission *perm)
+{
+  std::vector<std::string> list = split(arg, ' ');
+  std::vector<std::string>::iterator it;
+
+  for (it = list.begin(); it != list.end(); it++) {
+    if (!it->empty()) {
+      std::vector<std::string> kv = split(*it, ':');
+      if (kv[0].empty()) {
+        error_exit(usage);
+      }
+      switch (kv[0][0]) {
+      case 'a': // accessibility
+        if (kv[1] == "allow" || kv[1] == "yes" || kv[1] == "true") {
+          perm->accessibility = true;
+        } else {
+          perm->accessibility = false;
+        }
+        break;
+      case 'e': // extract
+        if (kv[1] == "allow" || kv[1] == "yes" || kv[1] == "true") {
+          perm->extract = true;
+        } else {
+          perm->extract = false;
+        }
+        break;
+      case 'm': // modify
+        if (kv[1] == "all")
+          perm->modify = qpdf_r3m_all;
+        else if (kv[1] == "annotate" || kv[1] == "annot")
+          perm->modify = qpdf_r3m_annotate;
+        else if (kv[1] == "form")
+          perm->modify = qpdf_r3m_form;
+        else if (kv[1] == "assembly" || kv[1] == "assem")
+          perm->modify = qpdf_r3m_assembly;
+        else if (kv[1] == "none") {
+          perm->modify = qpdf_r3m_none;
+        }
+        break;
+      case 'p': // print
+        if (kv[1] == "full")
+          perm->print = qpdf_r3p_full;
+        else if (kv[1] == "low")
+          perm->print = qpdf_r3p_low;
+        else if (kv[1] == "none") {
+          perm->print = qpdf_r3p_none;
+        }
+        break;
+      default:
+        error_exit(usage);
+        break;
+      }
+    }
+  }
+
+  return 0;
 }
 
 int main (int argc, char* argv[])
 {
-  Margins     margin;
-  int         opt, error = 0;
-  std::string outfile;
+  int               opt, error = 0;
+  Margins           margin;
+  struct permission perm = {qpdf_r3p_full, qpdf_r3m_all, true, true};
+  std::string       outfile, upasswd, opasswd;
+  bool              nocompress = false, linearize = false, encrypt = false,
+                    use_RC4 = false, is_min_version = false;
+  int               keysize = 40;
 
-  while ((opt = getopt(argc, argv, "o:V:m:")) != -1) {
+  while ((opt = getopt(argc, argv, "o:V:m:ZlEK:U:O:P:R")) != -1) {
     switch (opt) {
     case 'o': /* output file */
       outfile = std::string(optarg);
       break;
     case 'V':
-      version = std::string(optarg);
+      if (strlen(optarg) > 1 &&
+          optarg[strlen(optarg) - 1] == '+') {
+        version = std::string(optarg, optarg + strlen(optarg) - 1);
+        is_min_version = true;
+      } else {
+        version = std::string(optarg);
+        is_min_version = false;
+      }
       break;
     case 'm':
-      margin  = optarg_parse_margins(optarg);
+      error   = optarg_parse_margins(optarg, margin);
+      break;
+    case 'Z':
+      nocompress = true;
+      break;
+    case 'l':
+      linearize  = true;
+      break;
+    case 'E':
+      encrypt = true;
+      break;
+    case 'K':
+      keysize = atoi(optarg);
+      encrypt = true;
+      break;
+    case 'U':
+      upasswd = std::string(optarg);
+      encrypt = true;
+      break;
+    case 'O':
+      opasswd = std::string(optarg);
+      encrypt = true;
+      break;
+    case 'P':
+      error   = optarg_parse_permission(optarg, &perm);
+      encrypt = true;
+      break;
+    case 'R':
+      use_RC4 = true;
       break;
     case ':': case '?':
-      print_help();
-      exit(2);
+      error_exit(usage);
       break;
     }
   }
 
   QPDF qpdf;
-  // qpdf.PDFVersion(version);
-  qpdf.emptyPDF();
 
+  qpdf.emptyPDF();
   if (argc - optind > 2 && outfile.empty()) {
     // require -o option
-    print_help();
-    exit(2);
+    error_exit(usage);
   } else if (outfile.empty() && argc > 1) { // last filename is for output
     argc--;
     outfile = std::string(argv[argc]);
   } else if (argc - optind == 0) {
-    print_help();
-    exit(2);
+    error_exit(usage);
   }
 
   for ( ;!error && optind < argc; optind++) {
@@ -1219,16 +1354,75 @@ int main (int argc, char* argv[])
     catch (std::exception& e)
     {
       std::cerr << e.what() << std::endl;
-      error = -1;
+      error_exit("Error occured while processing file(s). No output written.");
     }
   }
 
-  if (!error) {
-    QPDFWriter w(qpdf, outfile.c_str());
-    w.forcePDFVersion(version);
-    w.write();
-    std::cerr << "Output written to \""<< outfile << "\"." << std::endl;
+  QPDFWriter w(qpdf, outfile.c_str());
+  if (encrypt) {
+    if (use_RC4) {
+      if (keysize == 40) {
+        w.setR2EncryptionParameters(upasswd.c_str(), opasswd.c_str(),
+                                    perm.print  != qpdf_r3p_none ? true : false,
+                                    perm.modify != qpdf_r3m_none ? true : false,
+                                    perm.extract,
+                                    perm.modify <= qpdf_r3m_annotate
+                                                               ? true : false);
+      } else if (keysize <= 128) {
+        if (version < "1.4" && !is_min_version) {
+          warn("Current encryption setting requires PDF ver. >= 1.4.\n" \
+               "Encryption will be disabled.");
+          encrypt = false;
+        } else {
+          w.setR3EncryptionParameters(upasswd.c_str(), opasswd.c_str(),
+                                      perm.accessibility, perm.extract,
+                                      perm.print, perm.modify);
+        }
+      } else {
+        error_exit("Key length > 128 unsupported for RC4 encryption.");
+      }
+    } else { // AESV2 or AESV3
+      if (keysize <= 128) {
+        // Unencrypt Metadata unsupported yet
+        if (version < "1.5" && !is_min_version) {
+          warn("Current encryption setting requires PDF ver. >= 1.5.\n" \
+               "Encryption will be disabled.");
+          encrypt = false;
+        } else {
+          w.setR4EncryptionParameters(upasswd.c_str(), opasswd.c_str(),
+                                      perm.accessibility, perm.extract,
+                                      perm.print, perm.modify, true, true);
+        }
+      } else if (keysize == 256) {
+        // Unencrypt Metadata unsupported yet
+        if (version < "1.7" && !is_min_version) {
+          warn("Current encryption setting requires PDF ver. > 1.7.\n" \
+                "Encryption will be disabled.");
+          encrypt = false;
+        } else {
+          w.setR6EncryptionParameters(upasswd.c_str(), opasswd.c_str(),
+                                      perm.accessibility, perm.extract,
+                                      perm.print, perm.modify, true);
+        }
+      } else {
+        error_exit("Key length > 256 unsupported.");
+      }
+    }
   }
+  if (is_min_version)
+    w.setMinimumPDFVersion(version);
+  else {
+    w.forcePDFVersion(version);
+  }
+  w.setStreamDataMode(nocompress ? qpdf_s_uncompress : qpdf_s_compress);
+  w.setLinearization(linearize);
+  std::vector<QPDFExc> warns = qpdf.getWarnings();
+  std::vector<QPDFExc>::iterator it;
+  w.write();
+  for (it = warns.begin(); it != warns.end(); it++) {
+    warn(it->getMessageDetail());
+  }
+  std::cerr << "Output written to \""<< outfile << "\"." << std::endl;
 
-  return 0;
+  return EXIT_OK;
 }
