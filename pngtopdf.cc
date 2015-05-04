@@ -1245,7 +1245,7 @@ optarg_parse_permission (const char *arg, struct permission *perm)
           perm->modify = qpdf_r3m_annotate;
         else if (kv[1] == "form")
           perm->modify = qpdf_r3m_form;
-        else if (kv[1] == "assembly" || kv[1] == "assem")
+        else if (kv[1] == "assemble" || kv[1] == "assem")
           perm->modify = qpdf_r3m_assembly;
         else if (kv[1] == "none") {
           perm->modify = qpdf_r3m_none;
