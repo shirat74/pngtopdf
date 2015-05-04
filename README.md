@@ -1,7 +1,7 @@
 # pngtopdf
 
 This is pngtopdf - a PNG to PDF converter.
-To build pngtopdf, you need libz, libpng, and libqpdf libraries to be installed.
+To build pngtopdf, you need zlib, libpng, and libqpdf libraries to be installed.
 
 Usage
 
