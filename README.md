@@ -5,17 +5,17 @@ To build pngtopdf, you need libz, libpng, and libqpdf libraries to be installed.
 
 Usage
 
-  pngtopdf [options] input output
+    pngtopdf [options] input output
   
 or
 
-  pngtopdf [options] -o output input1 input2 ... inputn
+    pngtopdf [options] -o output input1 input2 ... inputn
 
 options:
 
-  -o string     set output filename
-  -V number     set PDF version
-  -m dimensions set margins
+    - -o string     set output filename
+    - -V number     set PDF version
+    - -m dimensions set margins
  
  The margins are specified as 1-4 numbers with unit (pt if ommited).
  When four values are specified, then they represents top, right,
