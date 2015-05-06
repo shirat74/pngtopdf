@@ -29,6 +29,14 @@
 #include <iostream>
 #include <cassert>
 
+static bool quiet = true;
+static void message (std::string msg)
+{
+  if (!quiet)
+    std::cerr << msg << std::endl;
+}
+
+static std::string version = "1.7";
 
 #include <qpdf/QPDF.hh>
 #include <qpdf/QPDFExc.hh>
@@ -45,8 +53,6 @@
 #define PDF_TRANS_TYPE_NONE   0
 #define PDF_TRANS_TYPE_BINARY 1
 #define PDF_TRANS_TYPE_ALPHA  2
-
-static std::string version = "1.7";
 
 /* ColorSpace */
 static QPDFObjectHandle create_cspace_Indexed(png_structp png_ptr,
@@ -187,6 +193,13 @@ png_include_image (QPDF& qpdf, std::string filename, Margins margin)
   height     = png_get_image_height(png_ptr, png_info_ptr);
   bpc        = png_get_bit_depth   (png_ptr, png_info_ptr);
 
+  {
+    std::stringstream ss;
+    ss << "Image size: " << width << "x" << height << " (pixels)" << std::endl
+       << "Bit depth: " << (int) bpc << " (bits per channel)";
+    message(ss.str());
+  }
+
   // Ask libpng to convert down to 8-bpc.
   if (bpc > 8) {
     if (version < "1.5") {
@@ -224,6 +237,15 @@ png_include_image (QPDF& qpdf, std::string filename, Margins margin)
     ydensity = yppm > 0 ? 72.0 / 0.0254 / yppm : 1.0;
     page_width  = xdensity * width  + margin.left + margin.right ;
     page_height = ydensity * height + margin.top  + margin.bottom;
+
+    {
+      std::stringstream ss;
+      ss << "Page size: " << ROUND(25.4 * page_width / 72, 0.1)
+         << "mm x " << ROUND(25.4 * page_height / 72, 0.1) << "mm" << std::endl
+         << "Resolution: " << ROUND(72 / xdensity, 1.0) << "x"
+         << ROUND(72 / ydensity, 1.0)<< " (dpi)";
+      message(ss.str());
+    }
   }
 
   // Creating an image XObject.
@@ -387,7 +409,7 @@ png_include_image (QPDF& qpdf, std::string filename, Margins margin)
   page.replaceKey("/Resources", resources);
 
   // Add the page to the PDF file
-  qpdf.addPage(page, true);
+  qpdf.addPage(page, false);
 
   return 0;
 }
@@ -1273,6 +1295,8 @@ optarg_parse_permission (const char *arg, struct permission *perm)
 int main (int argc, char* argv[])
 {
   int               opt, error = 0;
+  extern char      *optarg;
+  extern int        optind;
   Margins           margin;
   struct permission perm = {qpdf_r3p_full, qpdf_r3m_all, true, true};
   std::string       outfile, upasswd, opasswd;
@@ -1346,7 +1370,6 @@ int main (int argc, char* argv[])
   }
 
   for ( ;!error && optind < argc; optind++) {
-    std::cerr << "Proccessing file: " << argv[optind] << std::endl;
     try
     {
       error = png_include_image(qpdf, argv[optind], margin);
@@ -1422,7 +1445,6 @@ int main (int argc, char* argv[])
   for (it = warns.begin(); it != warns.end(); it++) {
     warn(it->getMessageDetail());
   }
-  std::cerr << "Output written to \""<< outfile << "\"." << std::endl;
 
   return EXIT_OK;
 }
