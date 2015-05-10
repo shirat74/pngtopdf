@@ -20,11 +20,12 @@ Options:
     -v number     set PDF version (1.7)
     -m dimensions set margins (0 0 0 0)
 
+    -e, -E        enable/disable encryption (disabled)
     -c, -C        enable/disable CMYK conversion (disabled)
     -f, -F        enable/disable use of Flate predictor (disabled)
     -g, -G        enable/disable gamma pre-compensation (enabled)
     -l, -L        enable/disable Linearization (disabled)
-    -e, -E        enable/disable encryption (disabled)
+    -s, -S        enable/disable use of Object Stream (enabled)
     -z, -Z        enable/disable compression (enabled)
 
 Options for CMYK conversion:

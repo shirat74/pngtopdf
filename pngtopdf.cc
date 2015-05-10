@@ -34,6 +34,7 @@
 #include "Image.hh"
 #include "PNGImage.hh"
 
+// TODO: Need ColorSpace class
 enum eRenderingIntent {
   eRenderingIntentPerceptual = 0,
   eRenderingIntentRelativeColorimetric = 1,
@@ -41,14 +42,17 @@ enum eRenderingIntent {
   eRenderingIntentAbsoluteColorimetric = 3
 };
 
+// TODO: Using struct may increase maintainace cost...
 static struct
 {
   struct {
     std::string  version;
+    bool         autoIncrementVersion;
+    bool         useObjectStream;
   } PDF;
 
   struct {
-    std::string  color;
+    std::string  color; // location of color profiles
   } resourceDirectory;
 
   struct {
@@ -69,7 +73,7 @@ static struct
   } options;
 
 } config = {
-  { "1.7" },
+  { "1.7", false, true },
 
   {
 #if defined(_WIN32) || defined(_WIN64)
@@ -82,9 +86,9 @@ static struct
   {
      false,
 
-     "AdobeRGB1998.icc",
      "sRGB Color Space Profile.icm",
-     "JapanColor2001Coated.icc",
+     "sRGB Color Space Profile.icm",
+     "JapanColor2001Coated.icc", // Please change as appropriate for you.
 
      eRenderingIntentPerceptual,
      false,
@@ -142,7 +146,7 @@ static std::pair<std::string, std::string> strip_soft_mask(const PNGImage& src);
 static std::string create_soft_mask(const PNGImage& src);
 static bool        need_soft_mask(const PNGImage& src);
 
-
+// Create an stream object with stream data source from file
 static QPDFObjectHandle
 newStreamFromFile (QPDF& qpdf, const std::string filename)
 {
@@ -604,7 +608,9 @@ need_soft_mask (const PNGImage& src)
   return (palette.size() > 0 && palette[0].n == 4) ? true : false;
 }
 
-// Soft-Mask: stream
+// This is only for palette color images.
+// PNG associates transparency with color instead of pixels for palette
+// color.
 static std::string
 create_soft_mask (const PNGImage& src)
 {
@@ -618,14 +624,15 @@ create_soft_mask (const PNGImage& src)
     for (int32_t i = 0; i < src.getWidth(); i++) {
       uint8_t n = round(255 * (src.getPixel(i, j).v[0] / 65535.)); // FIXME
       smask[src.getWidth() * j + i] =
-          (n < palette.size()) ? round(255 * (palette[n].v[4] / 65535.)) : 0xffu;
+        (n < palette.size()) ? round(255 * (palette[n].v[4] / 65535.)) : 0xffu;
     }
   }
 
   return  smask;
 }
 
-// returns <image data without alpha channel, soft mask data>
+// Split the alpha channel from raster image data.
+// Returns <image data without alpha channel, soft mask data>
 static std::pair<std::string, std::string>
 strip_soft_mask (const PNGImage& src)
 {
@@ -703,8 +710,8 @@ strip_soft_mask (const PNGImage& src)
   return  std::make_pair(raster, smask);
 }
 
-// returns DecodeParms dictionary
-// raster modified.
+// Returns DecodeParms dictionary
+// NOTICE: "raster" modified.
 QPDFObjectHandle
 apply_tiff2_filter (std::string& raster,
                     int32_t width, int32_t height, int8_t bpc, int8_t num_comp)
@@ -754,8 +761,9 @@ apply_tiff2_filter (std::string& raster,
   return  parms;
 }
 
+// TODO: Rename it
 int
-png_include_image (QPDF& qpdf, std::string filename, Margins margin)
+png_include_image (QPDF& qpdf, const std::string filename, const Margins margin)
 {
   int32_t     page_width, page_height;
   std::string raster, raster_mask;
@@ -763,7 +771,7 @@ png_include_image (QPDF& qpdf, std::string filename, Margins margin)
 
   PNGImage src(filename,
                config.colorManagement.gammaCorrect ?
-                 PNGImage::eLoadGammaCorrect : PNGImage::eLoadOptionNone);
+                   PNGImage::eLoadGammaCorrect : PNGImage::eLoadOptionNone);
 
   if (!src.valid())
     return -1;
@@ -773,6 +781,7 @@ png_include_image (QPDF& qpdf, std::string filename, Margins margin)
   page_height = 72. * src.getHeight() / src.getResolutionY()
                 + margin.top  + margin.bottom + 0.5;
 
+  // PDF wants alpha channel to be separated.
   if (src.getNComps() == 2 || src.getNComps() == 4) {
     std::pair<std::string, std::string> data = strip_soft_mask(src);
     raster      = data.first;
@@ -786,6 +795,8 @@ png_include_image (QPDF& qpdf, std::string filename, Margins margin)
     has_smask  = false;
   }
 
+  // From here we do not use raster image data in PDFImage object "src".
+  // We use "src" object only for obtaining color and image information.
   if (config.colorManagement.convertToCMYK && src.getNComps() == 3) {
     cmsHTRANSFORM hTransform = setup_transform(src);
     if (hTransform) {
@@ -800,7 +811,7 @@ png_include_image (QPDF& qpdf, std::string filename, Margins margin)
     use_cmyk = true;
   }
 
-  // Creating an image XObject.
+  // Creating an Image XObject.
   QPDFObjectHandle image = QPDFObjectHandle::newStream(&qpdf);
   QPDFObjectHandle image_dict = image.getDict();
   image_dict.replaceKey("/Type",    QPDFObjectHandle::newName("/XObject"));
@@ -859,48 +870,73 @@ png_include_image (QPDF& qpdf, std::string filename, Margins margin)
 
   // Handle transparency
   if (src.hasColorKeyMask()) {
-    QPDFObjectHandle colorkey = QPDFObjectHandle::newArray();
-    Color color = src.getMaskColor();
-    if (config.colorManagement.convertToCMYK && src.getNComps() == 3) {
-      cmsHTRANSFORM hTransform = setup_transform(src);
-      if (hTransform) {
-        char inbuf[3], outbuf[4];
-        inbuf[0] = color.v[0]; inbuf[1] = color.v[1]; inbuf[2] = color.v[2];
-        cmsDoTransform(hTransform, inbuf, outbuf, 1);
-        // TODO: Mask color need to be converted too (but not for Indexed color)
-        color.v[0] = outbuf[0]; color.v[1] = outbuf[1]; color.v[2] = outbuf[2];
-        cmsDeleteTransform(hTransform);
+    if (config.PDF.version < "1.3" && config.PDF.autoIncrementVersion)
+      config.PDF.version = "1.3";
+    if (config.PDF.version < "1.3") {
+      std::cerr << "Current PDF version settint \"" << config.PDF.version
+                << "\" disallows color-key masking."
+                << "Color-key mask ignored."<< std::cerr;
+    } else {
+      QPDFObjectHandle colorkey = QPDFObjectHandle::newArray();
+      Color color = src.getMaskColor();
+      if (config.colorManagement.convertToCMYK && src.getNComps() == 3) {
+        cmsHTRANSFORM hTransform = setup_transform(src);
+        if (hTransform) {
+          char inbuf[3], outbuf[4];
+          inbuf[0] = color.v[0]; // TODO: implement operator=
+          inbuf[1] = color.v[1];
+          inbuf[2] = color.v[2];
+          cmsDoTransform(hTransform, inbuf, outbuf, 1);
+          color.v[0] = outbuf[0];
+          color.v[1] = outbuf[1];
+          color.v[2] = outbuf[2];
+          cmsDeleteTransform(hTransform);
+        }
       }
+      for (int i = 0; i < color.n; i++) {
+        colorkey.appendItem(QPDFObjectHandle::newInteger(color.v[i]));
+        colorkey.appendItem(QPDFObjectHandle::newInteger(color.v[i]));
+      }
+      image_dict.replaceKey("/Mask", colorkey);
     }
-    for (int i = 0; i < color.n; i++) {
-      colorkey.appendItem(QPDFObjectHandle::newInteger(color.v[i]));
-      colorkey.appendItem(QPDFObjectHandle::newInteger(color.v[i]));
-    }
-    image_dict.replaceKey("/Mask", colorkey);
   } else if (has_smask && raster_mask.size() > 0) {
-    // TIFF predictor 2 -- horizontal differencing
-    if (config.options.useFlatePredictorTIFF2) {
-      if (src.getBPC() >= 8) {
-        QPDFObjectHandle parms =
-            apply_tiff2_filter(raster_mask,
-                               src.getWidth(), src.getHeight(),
-                               src.getBPC(), 1);
-        image_dict.replaceKey("/DecodeParms", parms);
+    if (config.PDF.version < "1.4") {
+      if (config.PDF.autoIncrementVersion)
+        config.PDF.version = "1.4";
+      else {
+        std::cerr << "Current PDF version setting \"" << config.PDF.version
+                  << "\" disallows alpha transparency."
+                  << "Transparency ignored." << std::cerr;
+        has_smask = false; // Sorry for this
       }
     }
-    QPDFObjectHandle smask = QPDFObjectHandle::newStream(&qpdf);
-    QPDFObjectHandle dict  = smask.getDict();
-    dict.replaceKey("/Type",    QPDFObjectHandle::newName("/XObjcect"));
-    dict.replaceKey("/Subtype", QPDFObjectHandle::newName("/Image"));
-    dict.replaceKey("/Width"  , QPDFObjectHandle::newInteger(src.getWidth()));
-    dict.replaceKey("/Height" , QPDFObjectHandle::newInteger(src.getHeight()));
-    dict.replaceKey("/ColorSpace", QPDFObjectHandle::newName("/DeviceGray"));
-    dict.replaceKey("/BitsPerComponent",
-                    QPDFObjectHandle::newInteger(src.getBPC()));
-    smask.replaceStreamData(raster_mask,
-                            QPDFObjectHandle::newNull(),
-                            QPDFObjectHandle::newNull());
-    image_dict.replaceKey("/SMask", smask);
+    if (has_smask) {
+      QPDFObjectHandle smask = QPDFObjectHandle::newStream(&qpdf);
+      QPDFObjectHandle dict  = smask.getDict();
+      dict.replaceKey("/Type",    QPDFObjectHandle::newName("/XObjcect"));
+      dict.replaceKey("/Subtype", QPDFObjectHandle::newName("/Image"));
+      dict.replaceKey("/Width"  ,
+                      QPDFObjectHandle::newInteger(src.getWidth()));
+      dict.replaceKey("/Height" ,
+                      QPDFObjectHandle::newInteger(src.getHeight()));
+      dict.replaceKey("/ColorSpace",
+                      QPDFObjectHandle::newName("/DeviceGray"));
+      dict.replaceKey("/BitsPerComponent",
+                      QPDFObjectHandle::newInteger(src.getBPC()));
+      if (config.options.useFlatePredictorTIFF2) {
+        if (src.getBPC() >= 8) {
+          QPDFObjectHandle parms =
+              apply_tiff2_filter(raster_mask,
+                                 src.getWidth(), src.getHeight(),
+                                 src.getBPC(), 1);
+          dict.replaceKey("/DecodeParms", parms);
+        }
+      }
+      smask.replaceStreamData(raster_mask,
+                              QPDFObjectHandle::newNull(),
+                              QPDFObjectHandle::newNull());
+      image_dict.replaceKey("/SMask", smask);
+    }
   }
 
   // TIFF predictor 2 -- horizontal differencing
@@ -954,7 +990,7 @@ png_include_image (QPDF& qpdf, std::string filename, Margins margin)
   // Create the page dictionary
   QPDFObjectHandle page =
       qpdf.makeIndirectObject(QPDFObjectHandle::newDictionary());
-  page.replaceKey("/Type", QPDFObjectHandle::newName("/Page"));
+  page.replaceKey("/Type",      QPDFObjectHandle::newName("/Page"));
   page.replaceKey("/MediaBox",  mediabox);
   page.replaceKey("/ArtBox",    artbox);
   page.replaceKey("/Contents",  contents);
@@ -1145,10 +1181,10 @@ int main (int argc, char* argv[])
   struct permission perm = {qpdf_r3p_full, qpdf_r3m_all, true, true};
   std::string       outfile, upasswd, opasswd;
   bool              nocompress = false, linearize = false, encrypt = false,
-                    use_RC4 = false, is_min_version = false;
+                    use_RC4 = false;
   int               keysize = 40;
 
-  while ((opt = getopt(argc, argv, "bBcCfFgGi:o:v:m:zZlLeEK:U:O:P:R")) != -1) {
+  while ((opt = getopt(argc, argv, "bBcCfFgGsSi:o:v:m:zZlLeEK:U:O:P:R")) != -1) {
     switch (opt) {
     case 'b': // User Black Point compensation for conversion to CMYK
       config.colorManagement.useBlackPointCompensation = true;
@@ -1172,6 +1208,12 @@ int main (int argc, char* argv[])
     case 'G':
       config.colorManagement.gammaCorrect = false;
       break;
+    case 's':
+      config.PDF.useObjectStream = true;
+      break;
+    case 'S':
+      config.PDF.useObjectStream = false;
+      break;
     case 'i':
       if (!strcmp(optarg, "relative")) {
         config.colorManagement.renderingIntent =
@@ -1192,10 +1234,10 @@ int main (int argc, char* argv[])
       if (strlen(optarg) > 1 &&
           optarg[strlen(optarg) - 1] == '+') {
         config.PDF.version = std::string(optarg, optarg + strlen(optarg) - 1);
-        is_min_version = true;
+        config.PDF.autoIncrementVersion = true;
       } else {
         config.PDF.version = std::string(optarg);
-        is_min_version = false;
+        config.PDF.autoIncrementVersion = false;
       }
       break;
     case 'm':
@@ -1255,6 +1297,7 @@ int main (int argc, char* argv[])
     docResources.CMYKProfile = QPDFObjectHandle::newNull();
   }
 
+  // Main part
   for ( ;!error && optind < argc; optind++) {
     try
     {
@@ -1267,7 +1310,10 @@ int main (int argc, char* argv[])
     }
   }
 
+  // Write PDF output
 #if 0
+  // I do not yet understand Tagged PDF and Marked Content.
+  // It may be required for PDF/A-1a support.
   {
     QPDFObjectHandle catalog  = qpdf.getRoot();
     QPDFObjectHandle markinfo = QPDFObjectHandle::newDictionary();
@@ -1276,7 +1322,12 @@ int main (int argc, char* argv[])
   }
 #endif
 
+  // Be carefull QPDF dies with segfault if outfile could not be opened.
+  // It is often the case when output file is opened by Acrobat...
+  // Do not waste your time for this!!!
   QPDFWriter w(qpdf, outfile.c_str());
+
+  // Encryption section
   if (encrypt) {
     if (use_RC4) {
       if (keysize == 40) {
@@ -1287,7 +1338,8 @@ int main (int argc, char* argv[])
                                     perm.modify <= qpdf_r3m_annotate
                                                                ? true : false);
       } else if (keysize <= 128) {
-        if (config.PDF.version < "1.4" && !is_min_version) {
+        if ( config.PDF.version < "1.4" &&
+            !config.PDF.autoIncrementVersion) {
           warn("Current encryption setting requires PDF ver. >= 1.4.\n" \
                "Encryption will be disabled.");
           encrypt = false;
@@ -1302,7 +1354,8 @@ int main (int argc, char* argv[])
     } else { // AESV2 or AESV3
       if (keysize <= 128) {
         // Unencrypt Metadata unsupported yet
-        if (config.PDF.version < "1.5" && !is_min_version) {
+        if ( config.PDF.version < "1.5" &&
+            !config.PDF.autoIncrementVersion) {
           warn("Current encryption setting requires PDF ver. >= 1.5.\n" \
                "Encryption will be disabled.");
           encrypt = false;
@@ -1313,7 +1366,8 @@ int main (int argc, char* argv[])
         }
       } else if (keysize == 256) {
         // Unencrypt Metadata unsupported yet
-        if (config.PDF.version < "1.7" && !is_min_version) {
+        if ( config.PDF.version <= "1.7" &&
+            !config.PDF.autoIncrementVersion) {
           warn("Current encryption setting requires PDF ver. > 1.7.\n" \
                 "Encryption will be disabled.");
           encrypt = false;
@@ -1327,10 +1381,23 @@ int main (int argc, char* argv[])
       }
     }
   }
-  if (is_min_version)
+  if (config.PDF.autoIncrementVersion)
     w.setMinimumPDFVersion(config.PDF.version);
   else {
     w.forcePDFVersion(config.PDF.version);
+  }
+  if (config.PDF.useObjectStream) {
+    if (config.PDF.version < "1.5") {
+      if (config.PDF.autoIncrementVersion)
+        config.PDF.version = "1.5";
+      else {
+        std::cerr << "Current PDF version setting \"" << config.PDF.version
+                  << "\" disallows Object Stream. Ignoring it." << std::endl;
+        config.PDF.useObjectStream = false;
+      }
+    }
+    if (config.PDF.useObjectStream)
+      w.setObjectStreamMode(qpdf_o_generate);
   }
   w.setStreamDataMode(nocompress ? qpdf_s_uncompress : qpdf_s_compress);
   w.setLinearization(linearize);
