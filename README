@@ -1,5 +1,5 @@
 This is pngtopdf - a PNG to PDF converter.
-To build pngtopdf, you need zlib, libpng, and libqpdf libraries to be installed.
+To build pngtopdf, you need zlib, libpng, lcms2, and libqpdf libraries to be installed.
 
 Usage
 
@@ -19,7 +19,7 @@ Options:
     -c, -C        enable/disable CMYK conversion (disabled)
     -f, -F        enable/disable use of Flate predictor (disabled)
     -g, -G        enable/disable gamma pre-compensation (enabled)
-    -l, -L        enable/disable Linearize (disabled)
+    -l, -L        enable/disable Linearization (disabled)
     -e, -E        enable/disable encryption (disabled)
     -z, -Z        enable/disable compression (enabled)
 
