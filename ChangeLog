@@ -1,3 +1,7 @@
+2015-05-10 Shunsaku Hirata <shunsaku.hirata74@gmail.com>
+
+  * Support color space conversion to CMYK color.
+
 2015-05-04 Shunsaku Hirata <shunsaku.hirata74@gmail.com>
 
   * Support encryption and linearization.
