@@ -50,7 +50,9 @@ CONFIG_CLEAN_FILES =
 CONFIG_CLEAN_VPATH_FILES =
 am__installdirs = "$(DESTDIR)$(bindir)"
 PROGRAMS = $(bin_PROGRAMS)
-am_pngtopdf_OBJECTS = pngtopdf-pngtopdf.$(OBJEXT)
+am_pngtopdf_OBJECTS = pngtopdf-Image.$(OBJEXT) \
+	pngtopdf-PNGImage.$(OBJEXT) pngtopdf-Resampler.$(OBJEXT) \
+	pngtopdf-pngtopdf.$(OBJEXT)
 pngtopdf_OBJECTS = $(am_pngtopdf_OBJECTS)
 pngtopdf_DEPENDENCIES =
 DEFAULT_INCLUDES = -I.@am__isrc@
@@ -167,7 +169,7 @@ target_alias = @target_alias@
 top_build_prefix = @top_build_prefix@
 top_builddir = @top_builddir@
 top_srcdir = @top_srcdir@
-pngtopdf_SOURCES = pngtopdf.cc
+pngtopdf_SOURCES = Image.cc PNGImage.cc Resampler.cc pngtopdf.cc
 pngtopdf_LDADD = -lz -lpng -lqpdf
 pngtopdf_CFLAGS = -g -O2 -Wall
 pngtopdf_CPPFLAGS = -g -O2 -Wall
@@ -274,6 +276,9 @@ mostlyclean-compile:
 distclean-compile:
 	-rm -f *.tab.c
 
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/pngtopdf-Image.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/pngtopdf-PNGImage.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/pngtopdf-Resampler.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/pngtopdf-pngtopdf.Po@am__quote@
 
 .cc.o:
@@ -289,6 +294,48 @@ distclean-compile:
 @AMDEP_TRUE@@am__fastdepCXX_FALSE@	source='$<' object='$@' libtool=no @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCXX_FALSE@	DEPDIR=$(DEPDIR) $(CXXDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCXX_FALSE@	$(CXXCOMPILE) -c -o $@ `$(CYGPATH_W) '$<'`
+
+pngtopdf-Image.o: Image.cc
+@am__fastdepCXX_TRUE@	$(CXX) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(pngtopdf_CPPFLAGS) $(CPPFLAGS) $(AM_CXXFLAGS) $(CXXFLAGS) -MT pngtopdf-Image.o -MD -MP -MF $(DEPDIR)/pngtopdf-Image.Tpo -c -o pngtopdf-Image.o `test -f 'Image.cc' || echo '$(srcdir)/'`Image.cc
+@am__fastdepCXX_TRUE@	$(am__mv) $(DEPDIR)/pngtopdf-Image.Tpo $(DEPDIR)/pngtopdf-Image.Po
+@AMDEP_TRUE@@am__fastdepCXX_FALSE@	source='Image.cc' object='pngtopdf-Image.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCXX_FALSE@	DEPDIR=$(DEPDIR) $(CXXDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCXX_FALSE@	$(CXX) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(pngtopdf_CPPFLAGS) $(CPPFLAGS) $(AM_CXXFLAGS) $(CXXFLAGS) -c -o pngtopdf-Image.o `test -f 'Image.cc' || echo '$(srcdir)/'`Image.cc
+
+pngtopdf-Image.obj: Image.cc
+@am__fastdepCXX_TRUE@	$(CXX) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(pngtopdf_CPPFLAGS) $(CPPFLAGS) $(AM_CXXFLAGS) $(CXXFLAGS) -MT pngtopdf-Image.obj -MD -MP -MF $(DEPDIR)/pngtopdf-Image.Tpo -c -o pngtopdf-Image.obj `if test -f 'Image.cc'; then $(CYGPATH_W) 'Image.cc'; else $(CYGPATH_W) '$(srcdir)/Image.cc'; fi`
+@am__fastdepCXX_TRUE@	$(am__mv) $(DEPDIR)/pngtopdf-Image.Tpo $(DEPDIR)/pngtopdf-Image.Po
+@AMDEP_TRUE@@am__fastdepCXX_FALSE@	source='Image.cc' object='pngtopdf-Image.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCXX_FALSE@	DEPDIR=$(DEPDIR) $(CXXDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCXX_FALSE@	$(CXX) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(pngtopdf_CPPFLAGS) $(CPPFLAGS) $(AM_CXXFLAGS) $(CXXFLAGS) -c -o pngtopdf-Image.obj `if test -f 'Image.cc'; then $(CYGPATH_W) 'Image.cc'; else $(CYGPATH_W) '$(srcdir)/Image.cc'; fi`
+
+pngtopdf-PNGImage.o: PNGImage.cc
+@am__fastdepCXX_TRUE@	$(CXX) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(pngtopdf_CPPFLAGS) $(CPPFLAGS) $(AM_CXXFLAGS) $(CXXFLAGS) -MT pngtopdf-PNGImage.o -MD -MP -MF $(DEPDIR)/pngtopdf-PNGImage.Tpo -c -o pngtopdf-PNGImage.o `test -f 'PNGImage.cc' || echo '$(srcdir)/'`PNGImage.cc
+@am__fastdepCXX_TRUE@	$(am__mv) $(DEPDIR)/pngtopdf-PNGImage.Tpo $(DEPDIR)/pngtopdf-PNGImage.Po
+@AMDEP_TRUE@@am__fastdepCXX_FALSE@	source='PNGImage.cc' object='pngtopdf-PNGImage.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCXX_FALSE@	DEPDIR=$(DEPDIR) $(CXXDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCXX_FALSE@	$(CXX) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(pngtopdf_CPPFLAGS) $(CPPFLAGS) $(AM_CXXFLAGS) $(CXXFLAGS) -c -o pngtopdf-PNGImage.o `test -f 'PNGImage.cc' || echo '$(srcdir)/'`PNGImage.cc
+
+pngtopdf-PNGImage.obj: PNGImage.cc
+@am__fastdepCXX_TRUE@	$(CXX) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(pngtopdf_CPPFLAGS) $(CPPFLAGS) $(AM_CXXFLAGS) $(CXXFLAGS) -MT pngtopdf-PNGImage.obj -MD -MP -MF $(DEPDIR)/pngtopdf-PNGImage.Tpo -c -o pngtopdf-PNGImage.obj `if test -f 'PNGImage.cc'; then $(CYGPATH_W) 'PNGImage.cc'; else $(CYGPATH_W) '$(srcdir)/PNGImage.cc'; fi`
+@am__fastdepCXX_TRUE@	$(am__mv) $(DEPDIR)/pngtopdf-PNGImage.Tpo $(DEPDIR)/pngtopdf-PNGImage.Po
+@AMDEP_TRUE@@am__fastdepCXX_FALSE@	source='PNGImage.cc' object='pngtopdf-PNGImage.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCXX_FALSE@	DEPDIR=$(DEPDIR) $(CXXDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCXX_FALSE@	$(CXX) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(pngtopdf_CPPFLAGS) $(CPPFLAGS) $(AM_CXXFLAGS) $(CXXFLAGS) -c -o pngtopdf-PNGImage.obj `if test -f 'PNGImage.cc'; then $(CYGPATH_W) 'PNGImage.cc'; else $(CYGPATH_W) '$(srcdir)/PNGImage.cc'; fi`
+
+pngtopdf-Resampler.o: Resampler.cc
+@am__fastdepCXX_TRUE@	$(CXX) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(pngtopdf_CPPFLAGS) $(CPPFLAGS) $(AM_CXXFLAGS) $(CXXFLAGS) -MT pngtopdf-Resampler.o -MD -MP -MF $(DEPDIR)/pngtopdf-Resampler.Tpo -c -o pngtopdf-Resampler.o `test -f 'Resampler.cc' || echo '$(srcdir)/'`Resampler.cc
+@am__fastdepCXX_TRUE@	$(am__mv) $(DEPDIR)/pngtopdf-Resampler.Tpo $(DEPDIR)/pngtopdf-Resampler.Po
+@AMDEP_TRUE@@am__fastdepCXX_FALSE@	source='Resampler.cc' object='pngtopdf-Resampler.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCXX_FALSE@	DEPDIR=$(DEPDIR) $(CXXDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCXX_FALSE@	$(CXX) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(pngtopdf_CPPFLAGS) $(CPPFLAGS) $(AM_CXXFLAGS) $(CXXFLAGS) -c -o pngtopdf-Resampler.o `test -f 'Resampler.cc' || echo '$(srcdir)/'`Resampler.cc
+
+pngtopdf-Resampler.obj: Resampler.cc
+@am__fastdepCXX_TRUE@	$(CXX) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(pngtopdf_CPPFLAGS) $(CPPFLAGS) $(AM_CXXFLAGS) $(CXXFLAGS) -MT pngtopdf-Resampler.obj -MD -MP -MF $(DEPDIR)/pngtopdf-Resampler.Tpo -c -o pngtopdf-Resampler.obj `if test -f 'Resampler.cc'; then $(CYGPATH_W) 'Resampler.cc'; else $(CYGPATH_W) '$(srcdir)/Resampler.cc'; fi`
+@am__fastdepCXX_TRUE@	$(am__mv) $(DEPDIR)/pngtopdf-Resampler.Tpo $(DEPDIR)/pngtopdf-Resampler.Po
+@AMDEP_TRUE@@am__fastdepCXX_FALSE@	source='Resampler.cc' object='pngtopdf-Resampler.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCXX_FALSE@	DEPDIR=$(DEPDIR) $(CXXDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCXX_FALSE@	$(CXX) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(pngtopdf_CPPFLAGS) $(CPPFLAGS) $(AM_CXXFLAGS) $(CXXFLAGS) -c -o pngtopdf-Resampler.obj `if test -f 'Resampler.cc'; then $(CYGPATH_W) 'Resampler.cc'; else $(CYGPATH_W) '$(srcdir)/Resampler.cc'; fi`
 
 pngtopdf-pngtopdf.o: pngtopdf.cc
 @am__fastdepCXX_TRUE@	$(CXX) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(pngtopdf_CPPFLAGS) $(CPPFLAGS) $(AM_CXXFLAGS) $(CXXFLAGS) -MT pngtopdf-pngtopdf.o -MD -MP -MF $(DEPDIR)/pngtopdf-pngtopdf.Tpo -c -o pngtopdf-pngtopdf.o `test -f 'pngtopdf.cc' || echo '$(srcdir)/'`pngtopdf.cc

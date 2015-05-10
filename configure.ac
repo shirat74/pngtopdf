@@ -77,6 +77,26 @@ if test "x${has_png}" != xyes; then
    AC_MSG_ERROR([Unable to find libpng library.])
 fi
 
+dnl lcms2 required
+AC_ARG_WITH(lcms2-include-dir,
+ AS_HELP_STRING([--with-lcms2-include-dir=DIR],
+ [location of lcms2 headers]),,)
+AC_ARG_WITH(lcms2-lib-dir,
+ AS_HELP_STRING([--with-lcms2-lib-dir=DIR],
+ [location of lcms2 library binary]),,)
+if test "x$with_lcms2" != "x"; then
+  CPPFLAGS="-I$with_lcms2_include_dir $CPPFLAGS"
+fi
+if test "x$with_lcms2_lib_dir" != "x"; then
+  LDFLAGS="-L$with_lcms2_lib_dir $LDFLAGS"
+fi
+AC_CHECK_HEADER([lcms2.h],
+  AC_SEARCH_LIBS([cmsOpenProfileFromFile], [lcms2],
+  [has_lcms2=yes], [has_png=no]), [has_png=no],[])
+if test "x${has_lcms2}" != xyes; then
+   AC_MSG_ERROR([Unable to find lcms2 library.])
+fi
+
 dnl libqpdf required
 AC_ARG_WITH(qpdf-include-dir,
  AS_HELP_STRING([--with-qpdf-include-dir=DIR],
