@@ -826,9 +826,13 @@ png_include_image (QPDF& qpdf, const std::string filename, const Margins margin)
   // Handle ColorSpace
   QPDFObjectHandle colorspace;
   if (use_cmyk) {
+#if 0
     colorspace = QPDFObjectHandle::newArray();
     colorspace.appendItem(QPDFObjectHandle::newName("/ICCBased"));
     colorspace.appendItem(docResources.CMYKProfile);
+#else
+    colorspace = QPDFObjectHandle::newName("/DeviceCMYK");
+#endif
   } else if (src.hasPalette()) {
     colorspace = create_colorspace_Indexed(src, qpdf);
     if (need_soft_mask(src)) {
@@ -875,7 +879,7 @@ png_include_image (QPDF& qpdf, const std::string filename, const Margins margin)
     if (config.PDF.version < "1.3") {
       std::cerr << "Current PDF version settint \"" << config.PDF.version
                 << "\" disallows color-key masking."
-                << "Color-key mask ignored."<< std::cerr;
+                << " Color-key mask ignored."<< std::endl;
     } else {
       QPDFObjectHandle colorkey = QPDFObjectHandle::newArray();
       Color color = src.getMaskColor();
@@ -906,7 +910,7 @@ png_include_image (QPDF& qpdf, const std::string filename, const Margins margin)
       else {
         std::cerr << "Current PDF version setting \"" << config.PDF.version
                   << "\" disallows alpha transparency."
-                  << "Transparency ignored." << std::cerr;
+                  << " Transparency ignored." << std::endl;
         has_smask = false; // Sorry for this
       }
     }
@@ -1184,7 +1188,8 @@ int main (int argc, char* argv[])
                     use_RC4 = false;
   int               keysize = 40;
 
-  while ((opt = getopt(argc, argv, "bBcCfFgGsSi:o:v:m:zZlLeEK:U:O:P:R")) != -1) {
+  while ((opt = getopt(argc, argv, "bBcCfFgGsSi:o:v:m:zZlLeEK:U:O:P:R")) != -1)
+  {
     switch (opt) {
     case 'b': // User Black Point compensation for conversion to CMYK
       config.colorManagement.useBlackPointCompensation = true;
