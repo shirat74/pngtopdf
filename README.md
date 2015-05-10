@@ -11,16 +11,24 @@ or
 
     pngtopdf [options] -o output input1 input2 ... inputn
 
-options:
+Options:
 
     -o string     set output filename
-    -V number     set PDF version (1.7)
+    -v number     set PDF version (1.7)
     -m dimensions set margins (0 0 0 0)
-    -l            linearize (false)
-    -E            enable encryption (false)
+
+    -b, -B        enable/disable black point compensation (disabled)
+    -c, -C        enable/disable CMYK conversion (disabled)
+    -f, -F        enable/disable use of Flate predictor (disabled)
+    -g, -G        enable/disable gamma pre-compensation (enabled)
+    -l, -L        enable/disable Linearize (disabled)
+    -e, -E        enable/disable encryption (disabled)
+    -z, -Z        enable/disable compression (enabled)
+
+Options for encryption:
+
     -K number     encryption key size [40-256] (40)
     -R            use RC4 encryption algorithm (false)
-    -Z            disable compression (false)
     -O string     owner password (empty)
     -U string     user password (empty)
     -P string     set permission flags
