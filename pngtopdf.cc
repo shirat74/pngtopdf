@@ -34,6 +34,13 @@
 #include "Image.hh"
 #include "PNGImage.hh"
 
+enum eRenderingIntent {
+  eRenderingIntentPerceptual = 0,
+  eRenderingIntentRelativeColorimetric = 1,
+  eRenderingIntentSaturation = 2,
+  eRenderingIntentAbsoluteColorimetric = 3
+};
+
 static struct
 {
   struct {
@@ -45,16 +52,19 @@ static struct
   } resourceDirectory;
 
   struct {
+    bool         convertToCMYK;
+
     std::string  defaultRGBProfilePath;
     std::string  sRGBProfilePath;
     std::string  CMYKProfilePath;
+
+    enum eRenderingIntent renderingIntent;
     bool useBlackPointCompensation;
     bool gammaCorrect; // do pre-compensation when gAMA chunk exists but
                        // cHRM does *not* exist.
   } colorManagement;
 
   struct {
-    bool convertToCMYK;
     bool useFlatePredictorTIFF2;
   } options;
 
@@ -70,15 +80,18 @@ static struct
   },
 
   {
+     false,
+
      "AdobeRGB1998.icc",
      "sRGB Color Space Profile.icm",
      "JapanColor2001Coated.icc",
+
+     eRenderingIntentPerceptual,
      false,
      true,
   },
 
   {
-    false,
     false  // Current version of QPDF disallows the use of predictors...
   }
 };
@@ -230,7 +243,7 @@ setup_transform (const PNGImage& src)
       cmsCreateTransform(
           hInProfile,  src.getBPC() == 8 ? TYPE_RGB_8  : TYPE_RGB_16_SE,
           hOutProfile, src.getBPC() == 8 ? TYPE_CMYK_8 : TYPE_CMYK_16_SE,
-          INTENT_PERCEPTUAL,
+          config.colorManagement.renderingIntent,
           config.colorManagement.useBlackPointCompensation ?
               cmsFLAGS_BLACKPOINTCOMPENSATION : 0);
   }
@@ -521,7 +534,7 @@ create_colorspace_Indexed (const PNGImage& src, QPDF& qpdf)
   QPDFObjectHandle base;
   QPDFObjectHandle colorspace = QPDFObjectHandle::newArray();
   colorspace.appendItem(QPDFObjectHandle::newName("/Indexed"));
-  if (config.options.convertToCMYK) {
+  if (config.colorManagement.convertToCMYK) {
     cmsHTRANSFORM hTransform = setup_transform(src);
     if (!hTransform)
       base = QPDFObjectHandle::newName("/DeviceRGB");
@@ -773,7 +786,7 @@ png_include_image (QPDF& qpdf, std::string filename, Margins margin)
     has_smask  = false;
   }
 
-  if (config.options.convertToCMYK && src.getNComps() == 3) {
+  if (config.colorManagement.convertToCMYK && src.getNComps() == 3) {
     cmsHTRANSFORM hTransform = setup_transform(src);
     if (hTransform) {
       size_t num_pixel = src.getWidth() * src.getHeight();
@@ -815,8 +828,28 @@ png_include_image (QPDF& qpdf, std::string filename, Margins margin)
     colorspace = create_colorspace(src, qpdf);
   }
   image_dict.replaceKey("/ColorSpace", colorspace);
-  // Rendering intent is not in ColorSpace dictionary.
-  if (src.getCalibrationType() == calibration_srgb) {
+  // I don't yet understand it though...
+  if (config.colorManagement.convertToCMYK) {
+    std::string intent;
+    switch (config.colorManagement.renderingIntent) {
+    case eRenderingIntentPerceptual:
+      intent = "/Perceptual";
+      break;
+    case eRenderingIntentSaturation:
+      intent = "/Saturation";
+      break;
+    case eRenderingIntentRelativeColorimetric:
+      intent = "/RelativeColorimetric";
+      break;
+    case eRenderingIntentAbsoluteColorimetric:
+      intent = "/AbsoluteColorimetric";
+      break;
+    }
+    if (!intent.empty()) {
+      image_dict.replaceKey("/Intent",
+                            QPDFObjectHandle::newName(intent));
+    }
+  } else if (src.getCalibrationType() == calibration_srgb) {
     std::string intent = src.getsRGBIntent();
     if (!intent.empty()) {
       image_dict.replaceKey("/Intent",
@@ -828,7 +861,7 @@ png_include_image (QPDF& qpdf, std::string filename, Margins margin)
   if (src.hasColorKeyMask()) {
     QPDFObjectHandle colorkey = QPDFObjectHandle::newArray();
     Color color = src.getMaskColor();
-    if (config.options.convertToCMYK && src.getNComps() == 3) {
+    if (config.colorManagement.convertToCMYK && src.getNComps() == 3) {
       cmsHTRANSFORM hTransform = setup_transform(src);
       if (hTransform) {
         char inbuf[3], outbuf[4];
@@ -1115,7 +1148,7 @@ int main (int argc, char* argv[])
                     use_RC4 = false, is_min_version = false;
   int               keysize = 40;
 
-  while ((opt = getopt(argc, argv, "bBcfFgGCo:v:m:zZlLeEK:U:O:P:R")) != -1) {
+  while ((opt = getopt(argc, argv, "bBcCfFgGi:o:v:m:zZlLeEK:U:O:P:R")) != -1) {
     switch (opt) {
     case 'b': // User Black Point compensation for conversion to CMYK
       config.colorManagement.useBlackPointCompensation = true;
@@ -1123,10 +1156,10 @@ int main (int argc, char* argv[])
     case 'B':
       config.colorManagement.useBlackPointCompensation = false;
     case 'c': // Convert to CMYK
-      config.options.convertToCMYK = true;
+      config.colorManagement.convertToCMYK = true;
       break;
     case 'C':
-      config.options.convertToCMYK = false;
+      config.colorManagement.convertToCMYK = false;
     case 'f':
       config.options.useFlatePredictorTIFF2 = true;
       break;
@@ -1138,6 +1171,19 @@ int main (int argc, char* argv[])
       break;
     case 'G':
       config.colorManagement.gammaCorrect = false;
+      break;
+    case 'i':
+      if (!strcmp(optarg, "relative")) {
+        config.colorManagement.renderingIntent =
+            eRenderingIntentRelativeColorimetric;
+      } else if (!strcmp(optarg, "absolute")) {
+        config.colorManagement.renderingIntent =
+            eRenderingIntentAbsoluteColorimetric;
+      } else if (!strcmp(optarg, "perceptual")) {
+        config.colorManagement.renderingIntent = eRenderingIntentPerceptual;
+      } else if (!strcmp(optarg, "saturation")) {
+        config.colorManagement.renderingIntent = eRenderingIntentSaturation;
+      }
       break;
     case 'o': // output file
       outfile = std::string(optarg);
@@ -1200,7 +1246,7 @@ int main (int argc, char* argv[])
   }
 
   // For object reuse.
-  if (config.options.convertToCMYK) {
+  if (config.colorManagement.convertToCMYK) {
     QPDFObjectHandle profile =
         newStreamFromFile(qpdf, config.colorManagement.CMYKProfilePath);
     profile.getDict().replaceKey("/N", QPDFObjectHandle::newInteger(4));
