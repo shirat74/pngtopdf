@@ -44,7 +44,7 @@ PNGImage::check_for_png (FILE *fp)
 }
 
 // Creating an instance with data read from file
-PNGImage::PNGImage (const std::string filename, enum eLoadOption options)
+PNGImage::PNGImage (const std::string filename, int options)
   : Image(0, 0, 0, 0) // dummy
 {
   FILE       *fp;
@@ -58,6 +58,7 @@ PNGImage::PNGImage (const std::string filename, enum eLoadOption options)
   calibrationType = calibration_none;
   dpi_x = dpi_y =72;
 
+  // Shouldn't pass files which is not in PNG format to libpng.
   fp = fopen(filename.c_str(), FOPEN_RBIN_MODE);
   if(!fp || !check_for_png(fp)) {
     isValid = false;
@@ -96,22 +97,15 @@ PNGImage::PNGImage (const std::string filename, enum eLoadOption options)
   dpi_x = xppm > 0 ? xppm * 0.0254 : 72;
   dpi_y = yppm > 0 ? yppm * 0.0254 : 72;
 
-#if 0
-  // We don't support 1, 2, 4 bit depth...
-  if ( bpc < 8 &&
-      (color_type == PNG_COLOR_TYPE_GRAY ||
-       color_type == PNG_COLOR_TYPE_GRAY_ALPHA))
-    png_set_expand_gray_1_2_4_to_8(png_ptr);
-#endif
-
-  if ((options & eLoadStrip16) && bpc > 16) {
+  // Ask libpng to convert from 16 bit-depth to 8 bit-depth.
+  if ((options & eLoadOptionStrip16) && bpc > 16) {
     png_set_strip_16(png_ptr);
     bpc = 8;
   }
   // Ask libpng to gamma-correct.
   // It is wrong to assume screen gamma value 2.2 but...
   // We do gamma correction here only when uncalibrated color space is used.
-  if ((options & eLoadGammaCorrect) &&
+  if ((options & eLoadOptionGammaCorrect) &&
       !png_get_valid(png_ptr, png_info_ptr, PNG_INFO_iCCP) &&
       !png_get_valid(png_ptr, png_info_ptr, PNG_INFO_sRGB) &&
       !png_get_valid(png_ptr, png_info_ptr, PNG_INFO_cHRM) &&
@@ -120,7 +114,9 @@ PNGImage::PNGImage (const std::string filename, enum eLoadOption options)
     png_get_gAMA (png_ptr, png_info_ptr, &G);
     png_set_gamma(png_ptr, 2.2, G);
   }
-  if ((options & eLoadPrecomposeAlpha) &&
+  // Does pre-compositio of pixel into background when transparency
+  // isn't supported.
+  if ((options & eLoadOptionPrecomposeAlpha) &&
       (color_type & PNG_COLOR_MASK_ALPHA)) {
     png_color_16 bg;
     bg.red = 255; bg.green = 255; bg.blue  = 255; bg.gray = 255; bg.index = 0;
@@ -130,10 +126,10 @@ PNGImage::PNGImage (const std::string filename, enum eLoadOption options)
   // Read colorspace information.
   bool hassRGB, hasiCCP, hasgAMA, hascHRM;
   hassRGB = hasiCCP = hasgAMA = hascHRM = false;
-  // Precedence in this order.
+  // Precedence in this order -- ICC profile and sRGB chunk take precedence.
   if (png_get_valid(png_ptr, png_info_ptr, PNG_INFO_iCCP)) {
     png_charpp  name    = NULL;
-    int         compression_type = 0;
+    int         compression_type = 0; // Don't know how to treat it...
     png_bytepp  profile = NULL;
     png_uint_32 proflen = 0;
     if (png_get_iCCP(png_ptr, png_info_ptr,
@@ -148,6 +144,7 @@ PNGImage::PNGImage (const std::string filename, enum eLoadOption options)
   } else if (png_get_valid(png_ptr, png_info_ptr, PNG_INFO_sRGB)) {
     int  intent;
     if (png_get_sRGB(png_ptr, png_info_ptr, &intent)) {
+      // FIXME: use enum instead of strings.
       switch (intent) {
       case PNG_sRGB_INTENT_PERCEPTUAL:
         colorSpace.sRGB = "Perceptual";
@@ -181,12 +178,16 @@ PNGImage::PNGImage (const std::string filename, enum eLoadOption options)
       hascHRM = true;
     }
   }
+  // Specifing gamma when iCCP or sRGB exists is invalid.
   if (!hasiCCP && !hassRGB &&
       png_get_valid(png_ptr, png_info_ptr, PNG_INFO_gAMA)) {
     double G;
     if (png_get_gAMA(png_ptr, png_info_ptr, &G)) {
       colorSpace.gamma = 1.0 / G;
-      if ((options & eLoadGammaCorrect) && !hascHRM) {
+      if ((options & eLoadOptionGammaCorrect) && !hascHRM) {
+        // Ask libpng to gamma-correct images (only) when gAMA chunk exists
+        // but not cHRM. We should use calibrated color space supported by
+        // output format whenever possible instead of pre-compensating gamma.
         png_set_gamma(png_ptr, 2.2, G);
         colorSpace.hasGamma = hasgAMA = false;
         calibrationType = calibration_none;
@@ -200,7 +201,7 @@ PNGImage::PNGImage (const std::string filename, enum eLoadOption options)
   }
   png_read_update_info(png_ptr, png_info_ptr);
 
-  // Palette -- must come **before** tRNS
+  // Reading palette -- must come *before* tRNS
   isIndexed = false;
   if (png_get_valid(png_ptr, png_info_ptr, PNG_INFO_PLTE)) {
     png_colorp plte = NULL;
@@ -218,7 +219,7 @@ PNGImage::PNGImage (const std::string filename, enum eLoadOption options)
     }
   }
 
-  // tRNS
+  // Transparency information tRNS
   if (!png_get_valid(png_ptr, png_info_ptr, PNG_INFO_tRNS))
     hasMaskColor = false;
   else {
@@ -239,14 +240,21 @@ PNGImage::PNGImage (const std::string filename, enum eLoadOption options)
             maskColor = Color(0); // NOTE: index whithin color palette
             hasMaskColor = true;
           } else {
-            for (int8_t i = 0; i < num_trans; i++) {
-              // Add alpha value to the existing color palette.
-              palette[i].v[3] = round(65535 * (trans[i] / 255.0)); // alpha
-              palette[i].n    = 4;
-            }
-            for (int8_t i = 0; i < (int8_t) palette.size(); i ++) {
-              palette[i].v[3] = 65535u;
-              palette[i].n    = 4;
+            // TODO:
+            // There is a possibility that multiple color has opacity value
+            // but their opacity values are either 0 or 1. In that case, we
+            // can use more simpler color-key masking instead.
+            if (num_trans <= (int) palette.size()) {
+              for (int8_t i = 0; i < num_trans; i++) {
+                // Add alpha value to the existing color palette.
+                // We must read PLTE before tRNS!
+                palette[i].v[3] = round(65535 * (trans[i] / 255.0)); // alpha
+                palette[i].n    = 4;
+              }
+              for (int8_t i = 0; i < (int8_t) palette.size(); i ++) {
+                palette[i].v[3] = 65535u;
+                palette[i].n    = 4;
+              }
             }
             hasMaskColor = false; // Not simple color key masking
           }
@@ -291,6 +299,7 @@ PNGImage::PNGImage (const std::string filename, enum eLoadOption options)
                      rowbytes * height);
   delete data_ptr;
 
+  // We now have complete image data.
   // Actual timing of construction of Image base class is here.
   Image::reset(width, height, nComps, bpc, raster);
 }
@@ -390,7 +399,7 @@ PNGImage::save (const std::string filename) const
   }
   // Resolution convert ppi to pix-per-meter
   png_set_pHYs(png_ptr, png_info_ptr,
-               round((dpi_x * 10000.) / 254.), // add 127 to round to nearest int.
+               round((dpi_x * 10000.) / 254.),
                round((dpi_y * 10000.) / 254.),
                PNG_RESOLUTION_METER);
 
@@ -408,5 +417,5 @@ PNGImage::save (const std::string filename) const
     png_destroy_write_struct(&png_ptr, (png_infopp) NULL);
   fclose(fp);
 
-  return 0;
+  return  0;
 }

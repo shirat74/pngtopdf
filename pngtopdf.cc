@@ -114,6 +114,17 @@ Margins::Margins(float top, float right, float bottom, float left) :
 {
 }
 
+static void message_unavailable (const std::string& feature,
+                                 const std::string& version,
+                                 const std::string& required,
+                                 const std::string& treatment)
+{
+  std::cerr << "Current PDF version setting \"" << version
+            << "\" do not support " << feature << " (version "
+            << required << " required). " << feature << " "
+            << treatment << "." << std::endl;
+}
+
 #include <qpdf/QPDF.hh>
 #include <qpdf/QPDFExc.hh>
 #include <qpdf/QPDFObjectHandle.hh>
@@ -768,20 +779,35 @@ png_include_image (QPDF& qpdf, const std::string filename, const Margins margin)
   int32_t     page_width, page_height;
   std::string raster, raster_mask;
   bool        has_smask = false, use_cmyk = false;
+  int         png_load_options = 0;
 
-  PNGImage src(filename,
-               config.colorManagement.gammaCorrect ?
-                   PNGImage::eLoadGammaCorrect : PNGImage::eLoadOptionNone);
+  // Check for PDF version setting and choose appropriate PNG load options.
+  // PDF version < 1.3 supports no transparency.
+  // PDF version < 1.4 does not support Soft-Mask (alpha channel)
+  // PDF version < 1.4 does not suuport images with bit-depth 16.
+  if (config.colorManagement.gammaCorrect)
+    png_load_options |= PNGImage::eLoadOptionGammaCorrect;
+  if ( config.PDF.version < "1.4" &&
+      !config.PDF.autoIncrementVersion )
+    png_load_options |= PNGImage::eLoadOptionStrip16;
+  if ( config.PDF.version < "1.3" &&
+      !config.PDF.autoIncrementVersion )
+    png_load_options |= PNGImage::eLoadOptionPrecomposeAlpha;
 
+  // Load PNG image. Object is invalid when opening file failed.
+  PNGImage src(filename, png_load_options);
   if (!src.valid())
     return -1;
 
+  // Pagesize settings: PNGImage honors information from pHYs chunk.
+  // If there are no pHYs chunk, 72dpi will be assumed.
   page_width  = 72. * src.getWidth()  / src.getResolutionX()
                 + margin.left + margin.right  + 0.5;
   page_height = 72. * src.getHeight() / src.getResolutionY()
                 + margin.top  + margin.bottom + 0.5;
 
   // PDF wants alpha channel to be separated.
+  // Be careful! NComps may not be valied after here...
   if (src.getNComps() == 2 || src.getNComps() == 4) {
     std::pair<std::string, std::string> data = strip_soft_mask(src);
     raster      = data.first;
@@ -811,30 +837,49 @@ png_include_image (QPDF& qpdf, const std::string filename, const Margins margin)
     use_cmyk = true;
   }
 
+  // If BPC = 16, config.PDF.autoIncrementVersion must be true here since load
+  // option strip16 is set when PDF version < 1.4 and auto increment feature
+  // is not enabled. So simply increment version here.
+  if (src.getBPC() == 16 && config.PDF.version < "1.4")
+    config.PDF.version = "1.5";
+
   // Creating an Image XObject.
   QPDFObjectHandle image = QPDFObjectHandle::newStream(&qpdf);
   QPDFObjectHandle image_dict = image.getDict();
   image_dict.replaceKey("/Type",    QPDFObjectHandle::newName("/XObject"));
   image_dict.replaceKey("/Subtype", QPDFObjectHandle::newName("/Image"));
   image_dict.replaceKey("/Width",
-      QPDFObjectHandle::newInteger(src.getWidth()));
+                        QPDFObjectHandle::newInteger(src.getWidth()));
   image_dict.replaceKey("/Height",
-      QPDFObjectHandle::newInteger(src.getHeight()));
+                        QPDFObjectHandle::newInteger(src.getHeight()));
   image_dict.replaceKey("/BitsPerComponent",
-                         QPDFObjectHandle::newInteger(src.getBPC()));
+                        QPDFObjectHandle::newInteger(src.getBPC()));
 
-  // Handle ColorSpace
+  // Metadata to be inserted here
+#if 0
+  QPDFObjectHandle metadata = QPDFObjectHandle::newStream(qpdf);
+  // We must inspect iTXt chunk of PNG image to get XMP metadata.
+  // Currently no interface for doing that is available.
+  image_dict.replaceKey("/Metadata",
+                        qpdf.mekeIndeirectObject(metadata));
+#endif
+
+  // Handle ColorSpace: ColorSpace can be DeviceRGB, DeviceGray, CalRGB,
+  // CalGray, ICCBased according as PNG chunk information, or DeviceCMYK
+  // if conversion to CMYK ColorSpace is enabled. The sRGB ColorSpace is
+  // currently converted to approximate CalRGB ColorSpace, not ICC profile.
+  // DeviceN might be supported for supporting output devices with more
+  // colorants than just CMYK four colorants.
   QPDFObjectHandle colorspace;
   if (use_cmyk) {
-#if 0
-    colorspace = QPDFObjectHandle::newArray();
-    colorspace.appendItem(QPDFObjectHandle::newName("/ICCBased"));
-    colorspace.appendItem(docResources.CMYKProfile);
-#else
     colorspace = QPDFObjectHandle::newName("/DeviceCMYK");
-#endif
-  } else if (src.hasPalette()) {
+  } else if (src.hasPalette()) { // Indexed ColorSpace
+    // For creation of Indexed ColorSpace, a stream object may be created
+    // for base ColorSpace ICCBased. So, we need to pass qpdf object.
     colorspace = create_colorspace_Indexed(src, qpdf);
+    // tRNs chunk may contain intermediate values of opacity, which can
+    // not be supported via color-key masking. We need to create Soft-Mask
+    // for them.
     if (need_soft_mask(src)) {
       raster_mask = create_soft_mask(src);
       has_smask = true;
@@ -843,7 +888,9 @@ png_include_image (QPDF& qpdf, const std::string filename, const Margins margin)
     colorspace = create_colorspace(src, qpdf);
   }
   image_dict.replaceKey("/ColorSpace", colorspace);
-  // I don't yet understand it though...
+  // I do not understand it well though...
+  // Rendering intent is used for converting RGB color to CMYK.
+  // We reuse it for rendering of resulting image.
   if (config.colorManagement.convertToCMYK) {
     std::string intent;
     switch (config.colorManagement.renderingIntent) {
@@ -872,17 +919,23 @@ png_include_image (QPDF& qpdf, const std::string filename, const Margins margin)
     }
   }
 
-  // Handle transparency
+  // Handle transparency: Handling transparency is a bit complicated.
+  // Transparency is a latecomer for PDF. Don't forget forbid them
+  // for PDF/X-1 output.
   if (src.hasColorKeyMask()) {
     if (config.PDF.version < "1.3" && config.PDF.autoIncrementVersion)
       config.PDF.version = "1.3";
     if (config.PDF.version < "1.3") {
-      std::cerr << "Current PDF version settint \"" << config.PDF.version
-                << "\" disallows color-key masking."
-                << " Color-key mask ignored."<< std::endl;
+      // Shouldn't reach here -- pre-composition is requested to PNG loader
+      // when PDF version setting is less than 1.3 and auto-increment is not
+      // enabled.
+      message_unavailable("Color-Key Mask",
+                           config.PDF.version, "1.3", "ignored");
     } else {
+      // Color-key masking.
       QPDFObjectHandle colorkey = QPDFObjectHandle::newArray();
       Color color = src.getMaskColor();
+      // Color-key must be transformed to CMYK too.
       if (config.colorManagement.convertToCMYK && src.getNComps() == 3) {
         cmsHTRANSFORM hTransform = setup_transform(src);
         if (hTransform) {
@@ -897,6 +950,7 @@ png_include_image (QPDF& qpdf, const std::string filename, const Margins margin)
           cmsDeleteTransform(hTransform);
         }
       }
+      // TODO: implemet an easy way to append items to an array.
       for (int i = 0; i < color.n; i++) {
         colorkey.appendItem(QPDFObjectHandle::newInteger(color.v[i]));
         colorkey.appendItem(QPDFObjectHandle::newInteger(color.v[i]));
@@ -904,16 +958,17 @@ png_include_image (QPDF& qpdf, const std::string filename, const Margins margin)
       image_dict.replaceKey("/Mask", colorkey);
     }
   } else if (has_smask && raster_mask.size() > 0) {
+    // Soft-Mask required.
     if (config.PDF.version < "1.4") {
       if (config.PDF.autoIncrementVersion)
         config.PDF.version = "1.4";
       else {
-        std::cerr << "Current PDF version setting \"" << config.PDF.version
-                  << "\" disallows alpha transparency."
-                  << " Transparency ignored." << std::endl;
-        has_smask = false; // Sorry for this
+        message_unavailable("Alpha transparency",
+                            config.PDF.version, "1.4", "ignored");
+        has_smask = false; // Sorry for this...
       }
     }
+    // Create an Image XObject representing Soft-Mask.
     if (has_smask) {
       QPDFObjectHandle smask = QPDFObjectHandle::newStream(&qpdf);
       QPDFObjectHandle dict  = smask.getDict();
@@ -927,45 +982,55 @@ png_include_image (QPDF& qpdf, const std::string filename, const Margins margin)
                       QPDFObjectHandle::newName("/DeviceGray"));
       dict.replaceKey("/BitsPerComponent",
                       QPDFObjectHandle::newInteger(src.getBPC()));
+      // Not working: libqpdf removes DecodeParms!
+      QPDFObjectHandle parms = QPDFObjectHandle::newNull();
+      // Maybe apprication of predictor filter is unnecessary.
       if (config.options.useFlatePredictorTIFF2) {
         if (src.getBPC() >= 8) {
-          QPDFObjectHandle parms =
-              apply_tiff2_filter(raster_mask,
-                                 src.getWidth(), src.getHeight(),
-                                 src.getBPC(), 1);
+          parms = apply_tiff2_filter(raster_mask,
+                                     src.getWidth(), src.getHeight(),
+                                     src.getBPC(), 1);
           dict.replaceKey("/DecodeParms", parms);
         }
       }
       smask.replaceStreamData(raster_mask,
-                              QPDFObjectHandle::newNull(),
-                              QPDFObjectHandle::newNull());
+                              QPDFObjectHandle::newNull(), parms);
       image_dict.replaceKey("/SMask", smask);
     }
   }
 
   // TIFF predictor 2 -- horizontal differencing
+  // Not working: libqpdf removes DecodeParms!
+  // With strip_soft_mask() getNComps() no longer represents correct value
+  // for raster image data. Don't forget that CMYK conversion also modifies
+  // actual NComps.
+  QPDFObjectHandle parms = QPDFObjectHandle::newNull();
   if (config.options.useFlatePredictorTIFF2) {
+    int NComps = use_cmyk ? 4 :
+                 (has_smask ? src.getNComps() - 1 : src.getNComps()); // Ugh
     if (src.getBPC() >= 8 && src.getNComps() <= 4) {
-      QPDFObjectHandle parms =
-          apply_tiff2_filter(raster,
-                             src.getWidth(), src.getHeight(),
-                             src.getBPC(), src.getNComps());
+      parms = apply_tiff2_filter(raster,
+                                 src.getWidth(), src.getHeight(),
+                                 src.getBPC(), NComps);
       image_dict.replaceKey("/DecodeParms", parms);
     }
   }
   image.replaceStreamData(raster,
-                          QPDFObjectHandle::newNull(),
-                          QPDFObjectHandle::newNull());
+                          QPDFObjectHandle::newNull(), parms);
+
   // Page resources
+  // Put all procset. We don't need all though.
   QPDFObjectHandle procset =
       QPDFObjectHandle::parse("[/PDF/ImageC/ImageB/ImageI]");
+
+  // Image XObject
   QPDFObjectHandle xobject = QPDFObjectHandle::newDictionary();
   xobject.replaceKey("/Im1", image);
   QPDFObjectHandle resources = QPDFObjectHandle::newDictionary();
   resources.replaceKey("/ProcSet", procset);
   resources.replaceKey("/XObject", xobject);
 
-  // Media box
+  // MediaBox and ArtBox
   QPDFObjectHandle mediabox = QPDFObjectHandle::newArray();
   mediabox.appendItem(QPDFObjectHandle::newInteger(0));
   mediabox.appendItem(QPDFObjectHandle::newInteger(0));
@@ -978,7 +1043,9 @@ png_include_image (QPDF& qpdf, const std::string filename, const Margins margin)
   artbox.appendItem(QPDFObjectHandle::newInteger(page_width));
   artbox.appendItem(QPDFObjectHandle::newInteger(page_height));
 
-  // Create the page content stream
+  // Create the page content stream.
+  // Image should be scaled to the physical size of image, represented
+  // in PostScript point -- 1inch = 72pt
   std::string content_stream =
       "q "   +
       QUtil::double_to_string(72 * src.getWidth()  / src.getResolutionX()) +
@@ -991,19 +1058,20 @@ png_include_image (QPDF& qpdf, const std::string filename, const Margins margin)
   QPDFObjectHandle contents =
       QPDFObjectHandle::newStream(&qpdf, content_stream);
 
-  // Create the page dictionary
+  // Create Page dictionary
   QPDFObjectHandle page =
       qpdf.makeIndirectObject(QPDFObjectHandle::newDictionary());
   page.replaceKey("/Type",      QPDFObjectHandle::newName("/Page"));
   page.replaceKey("/MediaBox",  mediabox);
   page.replaceKey("/ArtBox",    artbox);
   page.replaceKey("/Contents",  contents);
+  // TODO: DefaultCMYK may be added to Page Resources.
   page.replaceKey("/Resources", resources);
 
-  // Add the page to the PDF file
+  // Add page to PDF file. To append a page use "false" as second argument.
   qpdf.addPage(page, false);
 
-  return 0;
+  return  0;
 }
 
 
@@ -1013,16 +1081,11 @@ static const int EXIT_OK    = 0;
 
 static const char* const usage = "bals!";
 
-static void error_exit (std::string const& msg)
+static void error_exit (const std::string& mesg)
 {
-  if (!msg.empty())
-    std::cerr << msg << std::endl;
+  if (!mesg.empty())
+    std::cerr << mesg << std::endl;
   exit(EXIT_ERROR);
-}
-
-static void warn (std::string const& msg)
-{
-  std::cerr << msg << std::endl;
 }
 
 static int
@@ -1191,34 +1254,32 @@ int main (int argc, char* argv[])
   while ((opt = getopt(argc, argv, "bBcCfFgGsSi:o:v:m:zZlLeEK:U:O:P:R")) != -1)
   {
     switch (opt) {
-    case 'b': // User Black Point compensation for conversion to CMYK
+    // Some options actually are toggle switches. Use lowercase for enable
+    // and uppercase for disable.
+
+    // Color management section.
+    // User Black Point compensation for conversion to CMYK
+    case 'b':
       config.colorManagement.useBlackPointCompensation = true;
       break;
     case 'B':
       config.colorManagement.useBlackPointCompensation = false;
-    case 'c': // Convert to CMYK
+    // Enable conversion to CMYK.
+    case 'c':
       config.colorManagement.convertToCMYK = true;
       break;
     case 'C':
       config.colorManagement.convertToCMYK = false;
-    case 'f':
-      config.options.useFlatePredictorTIFF2 = true;
-      break;
-    case 'F':
-      config.options.useFlatePredictorTIFF2 = false;
-      break;
+    // Do gamma-precompensation for some situation.
+    // PDF do not support the case where simply only gamma value is supplied.
     case 'g':
       config.colorManagement.gammaCorrect = true;
       break;
     case 'G':
       config.colorManagement.gammaCorrect = false;
       break;
-    case 's':
-      config.PDF.useObjectStream = true;
-      break;
-    case 'S':
-      config.PDF.useObjectStream = false;
-      break;
+    // Rendering intent: I don't understand it well...
+    // It can be used when conversion to CMYK happens.
     case 'i':
       if (!strcmp(optarg, "relative")) {
         config.colorManagement.renderingIntent =
@@ -1232,9 +1293,32 @@ int main (int argc, char* argv[])
         config.colorManagement.renderingIntent = eRenderingIntentSaturation;
       }
       break;
-    case 'o': // output file
+
+    // Not working... QPDF doesn't like DecodeParms supplied.
+    case 'f':
+      config.options.useFlatePredictorTIFF2 = true;
+      break;
+    case 'F':
+      config.options.useFlatePredictorTIFF2 = false;
+      break;
+
+    // Use object stream -- requires PDF version 1.5 or higher
+    case 's':
+      config.PDF.useObjectStream = true;
+      break;
+    case 'S':
+      config.PDF.useObjectStream = false;
+      break;
+
+    // Output filename.
+    case 'o':
       outfile = std::string(optarg);
       break;
+
+    // PDF version -- use appended '+' letter to suggest PDF version can
+    // be automatically increased necessary for supporting various feature
+    // such as transparency and encryption; e.g., "1.5+".
+    // WARNING: QPDF may abort() if invalid string is supplied...
     case 'v':
       if (strlen(optarg) > 1 &&
           optarg[strlen(optarg) - 1] == '+') {
@@ -1245,13 +1329,23 @@ int main (int argc, char* argv[])
         config.PDF.autoIncrementVersion = false;
       }
       break;
+
+    // Page setup
+    // Margins -- specified in the form "1in 30pt 2cm 20mm", CSS-style margin
+    // specification.
     case 'm':
       error   = optarg_parse_margins(optarg, margin);
       break;
+
+    // Disable compression -- useful for debugging purpose.
     case 'z': nocompress = false; break;
     case 'Z': nocompress = true;  break;
+
+    // Linearization
     case 'l': linearize  = true;  break;
     case 'L': linearize  = false; break;
+
+    // Encryption section
     case 'e': encrypt    = true;  break;
     case 'E': encrypt    = false; break;
     case 'K':
@@ -1270,18 +1364,24 @@ int main (int argc, char* argv[])
       error   = optarg_parse_permission(optarg, &perm);
       encrypt = true;
       break;
+    // 'R' option is exception. Should be removed?
+    // It is not lower/upper pair to enable/disable this feature.
     case 'R':
       use_RC4 = true;
       break;
+
     case ':': case '?':
       error_exit(usage);
       break;
     }
   }
 
+  // Create an instance of QPDF object and create empty page tree node.
   QPDF qpdf;
-
   qpdf.emptyPDF();
+
+  // Start processing input PNG file
+  // Forcing 'o' option for multiple PNG file conversion.
   if (argc - optind > 2 && outfile.empty()) {
     // require -o option
     error_exit(usage);
@@ -1292,7 +1392,8 @@ int main (int argc, char* argv[])
     error_exit(usage);
   }
 
-  // For object reuse.
+  // For object reuse -- DefaultCMYK profile embedded only once. (currently
+  // not embedded though)
   if (config.colorManagement.convertToCMYK) {
     QPDFObjectHandle profile =
         newStreamFromFile(qpdf, config.colorManagement.CMYKProfilePath);
@@ -1326,13 +1427,16 @@ int main (int argc, char* argv[])
     catalog.replaceKey("/MarkInfo", markinfo);
   }
 #endif
+  // There should be a way to attach document-wide XMP metadata.
 
-  // Be carefull QPDF dies with segfault if outfile could not be opened.
+  // Write output PDF file.
+  //
+  // BE CAREFUL QPDF dies with segfault if outfile could not be opened.
   // It is often the case when output file is opened by Acrobat...
   // Do not waste your time for this!!!
   QPDFWriter w(qpdf, outfile.c_str());
 
-  // Encryption section
+  // Setup for encryption
   if (encrypt) {
     if (use_RC4) {
       if (keysize == 40) {
@@ -1345,8 +1449,8 @@ int main (int argc, char* argv[])
       } else if (keysize <= 128) {
         if ( config.PDF.version < "1.4" &&
             !config.PDF.autoIncrementVersion) {
-          warn("Current encryption setting requires PDF ver. >= 1.4.\n" \
-               "Encryption will be disabled.");
+          message_unavailable("Encryption (Key size > 40)",
+                               config.PDF.version, "1.4", "disabled");
           encrypt = false;
         } else {
           w.setR3EncryptionParameters(upasswd.c_str(), opasswd.c_str(),
@@ -1361,8 +1465,8 @@ int main (int argc, char* argv[])
         // Unencrypt Metadata unsupported yet
         if ( config.PDF.version < "1.5" &&
             !config.PDF.autoIncrementVersion) {
-          warn("Current encryption setting requires PDF ver. >= 1.5.\n" \
-               "Encryption will be disabled.");
+          message_unavailable("AESV2 encryption",
+                               config.PDF.version, "1.5", "disabled");
           encrypt = false;
         } else {
           w.setR4EncryptionParameters(upasswd.c_str(), opasswd.c_str(),
@@ -1373,8 +1477,8 @@ int main (int argc, char* argv[])
         // Unencrypt Metadata unsupported yet
         if ( config.PDF.version <= "1.7" &&
             !config.PDF.autoIncrementVersion) {
-          warn("Current encryption setting requires PDF ver. > 1.7.\n" \
-                "Encryption will be disabled.");
+          message_unavailable("AESV3 encryption",
+                              config.PDF.version, "1.7+", "disabled");
           encrypt = false;
         } else {
           w.setR6EncryptionParameters(upasswd.c_str(), opasswd.c_str(),
@@ -1386,18 +1490,22 @@ int main (int argc, char* argv[])
       }
     }
   }
+
+  // Set PDF version
   if (config.PDF.autoIncrementVersion)
     w.setMinimumPDFVersion(config.PDF.version);
   else {
     w.forcePDFVersion(config.PDF.version);
   }
+
+  // Other nice features of QPDF -- Object Stream and Linearization.
   if (config.PDF.useObjectStream) {
     if (config.PDF.version < "1.5") {
       if (config.PDF.autoIncrementVersion)
         config.PDF.version = "1.5";
       else {
-        std::cerr << "Current PDF version setting \"" << config.PDF.version
-                  << "\" disallows Object Stream. Ignoring it." << std::endl;
+        message_unavailable("Object Stream",
+                             config.PDF.version, "1.5", "disabled");
         config.PDF.useObjectStream = false;
       }
     }
@@ -1406,12 +1514,14 @@ int main (int argc, char* argv[])
   }
   w.setStreamDataMode(nocompress ? qpdf_s_uncompress : qpdf_s_compress);
   w.setLinearization(linearize);
+
   std::vector<QPDFExc> warns = qpdf.getWarnings();
-  std::vector<QPDFExc>::iterator it;
+  // Write
   w.write();
-  for (it = warns.begin(); it != warns.end(); it++) {
-    warn(it->getMessageDetail());
+  for (std::vector<QPDFExc>::iterator it = warns.begin();
+       it != warns.end(); it++) {
+    std::cerr << "From QPDF: " << it->getMessageDetail() << std::endl;
   }
 
-  return EXIT_OK;
+  return  EXIT_OK;
 }
