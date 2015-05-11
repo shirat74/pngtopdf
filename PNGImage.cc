@@ -98,7 +98,7 @@ PNGImage::PNGImage (const std::string filename, int options)
   dpi_y = yppm > 0 ? yppm * 0.0254 : 72;
 
   // Ask libpng to convert from 16 bit-depth to 8 bit-depth.
-  if ((options & eLoadOptionStrip16) && bpc > 16) {
+  if ((options & eLoadOptionStrip16) && bpc == 16) {
     png_set_strip_16(png_ptr);
     bpc = 8;
   }

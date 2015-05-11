@@ -60,7 +60,7 @@ static struct
 
     std::string  defaultRGBProfilePath;
     std::string  sRGBProfilePath;
-    std::string  CMYKProfilePath;
+    std::string  defaultCMYKProfilePath;
 
     enum eRenderingIntent renderingIntent;
     bool useBlackPointCompensation;
@@ -119,8 +119,8 @@ static void message_unavailable (const std::string& feature,
                                  const std::string& required,
                                  const std::string& treatment)
 {
-  std::cerr << "Current PDF version setting \"" << version
-            << "\" do not support " << feature << " (version "
+  std::cerr << "PDF version \"" << version
+            << "\" does not support " << feature << " (version "
             << required << " required). " << feature << " "
             << treatment << "." << std::endl;
 }
@@ -249,9 +249,10 @@ setup_transform (const PNGImage& src)
   cmsHPROFILE hOutProfile =
     cmsOpenProfileFromFile(
       (config.resourceDirectory.color +
-        config.colorManagement.CMYKProfilePath).c_str(), "r");
+        config.colorManagement.defaultCMYKProfilePath).c_str(), "r");
   if (cmsGetColorSpace(hOutProfile) != cmsSigCmykData) {
-    std::cerr << "ICC profile \"" << config.colorManagement.CMYKProfilePath
+    std::cerr << "ICC profile \""
+              << config.colorManagement.defaultCMYKProfilePath
               << "\" not for CMYK." << std::endl;
   } else {
     hTransform =
@@ -751,8 +752,8 @@ apply_tiff2_filter (std::string& raster,
                 ((uint16_t) raster[pos+c]) * 256 + (uint16_t) raster[pos+c+1];
             uint16_t sub = val - prev[c];
             prev[c] = val;
-            raster[pos+c  ] = (sub >> 8) & 0xff;
-            raster[pos+c+1] = sub & 0xff;
+            raster[pos+2*c  ] = (sub >> 8) & 0xff;
+            raster[pos+2*c+1] = sub & 0xff;
           }
           break;
         }
@@ -784,10 +785,10 @@ png_include_image (QPDF& qpdf, const std::string filename, const Margins margin)
   // Check for PDF version setting and choose appropriate PNG load options.
   // PDF version < 1.3 supports no transparency.
   // PDF version < 1.4 does not support Soft-Mask (alpha channel)
-  // PDF version < 1.4 does not suuport images with bit-depth 16.
+  // PDF version < 1.5 does not suuport images with bit-depth 16.
   if (config.colorManagement.gammaCorrect)
     png_load_options |= PNGImage::eLoadOptionGammaCorrect;
-  if ( config.PDF.version < "1.4" &&
+  if ( config.PDF.version < "1.5" &&
       !config.PDF.autoIncrementVersion )
     png_load_options |= PNGImage::eLoadOptionStrip16;
   if ( config.PDF.version < "1.3" &&
@@ -838,10 +839,10 @@ png_include_image (QPDF& qpdf, const std::string filename, const Margins margin)
   }
 
   // If BPC = 16, config.PDF.autoIncrementVersion must be true here since load
-  // option strip16 is set when PDF version < 1.4 and auto increment feature
+  // option strip16 is set when PDF version < 1.5 and auto increment feature
   // is not enabled. So simply increment version here.
-  if (src.getBPC() == 16 && config.PDF.version < "1.4")
-    config.PDF.version = "1.5";
+  if (src.getBPC() == 16 && config.PDF.version < "1.5")
+          config.PDF.version = "1.5";
 
   // Creating an Image XObject.
   QPDFObjectHandle image = QPDFObjectHandle::newStream(&qpdf);
@@ -1264,12 +1265,14 @@ int main (int argc, char* argv[])
       break;
     case 'B':
       config.colorManagement.useBlackPointCompensation = false;
+      break;
     // Enable conversion to CMYK.
     case 'c':
       config.colorManagement.convertToCMYK = true;
       break;
     case 'C':
       config.colorManagement.convertToCMYK = false;
+      break;
     // Do gamma-precompensation for some situation.
     // PDF do not support the case where simply only gamma value is supplied.
     case 'g':
@@ -1396,7 +1399,7 @@ int main (int argc, char* argv[])
   // not embedded though)
   if (config.colorManagement.convertToCMYK) {
     QPDFObjectHandle profile =
-        newStreamFromFile(qpdf, config.colorManagement.CMYKProfilePath);
+        newStreamFromFile(qpdf, config.colorManagement.defaultCMYKProfilePath);
     profile.getDict().replaceKey("/N", QPDFObjectHandle::newInteger(4));
     docResources.CMYKProfile = qpdf.makeIndirectObject(profile);
   } else {
@@ -1431,10 +1434,11 @@ int main (int argc, char* argv[])
 
   // Write output PDF file.
   //
-  // BE CAREFUL QPDF dies with segfault if outfile could not be opened.
+  // BE CAREFUL QPDF abort if outfile could not be opened.
   // It is often the case when output file is opened by Acrobat...
   // Do not waste your time for this!!!
-  QPDFWriter w(qpdf, outfile.c_str());
+  QPDFWriter w(qpdf);
+  w.setOutputFilename(outfile.c_str());
 
   // Setup for encryption
   if (encrypt) {
