@@ -740,18 +740,19 @@ apply_tiff2_filter (std::string& raster,
         switch (bpc) {
         case 8:
           {
-            uint8_t val = raster[pos+c];
-            uint8_t sub = val - prev[c];
-            prev[c] = val;
+            uint8_t right = (i == width-1) ? 0 : raster[pos+c+num_comp];
+            uint8_t sub   = (right - prev[c]);
+            prev[c]       = right;
             raster[pos+c] = sub;
           }
           break;
         case 16:
           {
-            uint16_t val =
-                ((uint16_t) raster[pos+c]) * 256 + (uint16_t) raster[pos+c+1];
-            uint16_t sub = val - prev[c];
-            prev[c] = val;
+            uint16_t right = (i == width-1) ? 0 :
+                               ((uint16_t) raster[pos+2*c+2*num_comp]) * 256 +
+                                (uint16_t) raster[pos+2*c+2*num_comp+1];
+            uint16_t sub   = right - prev[c];
+            prev[c]        = right;
             raster[pos+2*c  ] = (sub >> 8) & 0xff;
             raster[pos+2*c+1] = sub & 0xff;
           }
@@ -1494,6 +1495,10 @@ int main (int argc, char* argv[])
       }
     }
   }
+
+  // Predictor filter must be disabled if not compressed.
+  if (nocompress)
+      config.options.useFlatePredictorTIFF2 = false;
 
   // Set PDF version
   if (config.PDF.autoIncrementVersion)
