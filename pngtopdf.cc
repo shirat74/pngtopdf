@@ -728,31 +728,31 @@ QPDFObjectHandle
 apply_tiff2_filter (std::string& raster,
                     int32_t width, int32_t height, int8_t bpc, int8_t num_comp)
 {
-  uint16_t prev[4] = {0, 0, 0, 0};
-
   if (bpc < 8 || num_comp > 4)
     return QPDFObjectHandle::newNull(); // Not supported yet
 
   for (int32_t j = 0; j < height; j++) {
+    uint16_t prev[4] = {0, 0, 0, 0};
     for (int32_t i = 0; i < width; i++) {
       int32_t pos = (bpc / 8) * num_comp * (width * j + i);
       for (int c = 0; c < num_comp; c++) {
         switch (bpc) {
         case 8:
           {
-            uint8_t right = (i == width-1) ? 0 : raster[pos+c+num_comp];
-            uint8_t sub   = (right - prev[c]);
-            prev[c]       = right;
+            uint8_t cur   = raster[pos+c];
+            int32_t sub   = cur - prev[c];
+            prev[c]       = cur;
             raster[pos+c] = sub;
           }
           break;
+
+
         case 16:
           {
-            uint16_t right = (i == width-1) ? 0 :
-                               ((uint16_t) raster[pos+2*c+2*num_comp]) * 256 +
-                                (uint16_t) raster[pos+2*c+2*num_comp+1];
-            uint16_t sub   = right - prev[c];
-            prev[c]        = right;
+            uint16_t cur = ((uint8_t)raster[pos+2*c])*256 +
+                             (uint8_t)raster[pos+2*c+1];
+            uint16_t sub  = cur - prev[c];
+            prev[c]       = cur;
             raster[pos+2*c  ] = (sub >> 8) & 0xff;
             raster[pos+2*c+1] = sub & 0xff;
           }
@@ -1008,13 +1008,14 @@ png_include_image (QPDF& qpdf, const std::string filename, const Margins margin)
   // actual NComps.
   QPDFObjectHandle parms = QPDFObjectHandle::newNull();
   if (config.options.useFlatePredictorTIFF2) {
-    int NComps = use_cmyk ? 4 :
+    int NComps =
+     use_cmyk ? 4 :
                  (has_smask ? src.getNComps() - 1 : src.getNComps()); // Ugh
     if (src.getBPC() >= 8 && src.getNComps() <= 4) {
       parms = apply_tiff2_filter(raster,
                                  src.getWidth(), src.getHeight(),
                                  src.getBPC(), NComps);
-      image_dict.replaceKey("/DecodeParms", parms);
+      image_dict.replaceKey("/DecodeParme", parms);
     }
   }
   image.replaceStreamData(raster,
@@ -1248,12 +1249,13 @@ int main (int argc, char* argv[])
   extern int        optind;
   Margins           margin;
   struct permission perm = {qpdf_r3p_full, qpdf_r3m_all, true, true};
-  std::string       outfile, upasswd, opasswd;
+  std::string       outfile, xmpfile, upasswd, opasswd;
   bool              nocompress = false, linearize = false, encrypt = false,
                     use_RC4 = false;
   int               keysize = 40;
 
-  while ((opt = getopt(argc, argv, "bBcCfFgGsSi:o:v:m:zZlLeEK:U:O:P:R")) != -1)
+  while ((opt = getopt(argc,
+                       argv, "bBcCfFgGsSi:o:v:m:x:zZlLeEK:U:O:P:R")) != -1)
   {
     switch (opt) {
     // Some options actually are toggle switches. Use lowercase for enable
@@ -1341,6 +1343,11 @@ int main (int argc, char* argv[])
       error   = optarg_parse_margins(optarg, margin);
       break;
 
+    // XMP metadata
+    case 'x':
+      xmpfile = std::string(optarg);
+      break;
+
     // Disable compression -- useful for debugging purpose.
     case 'z': nocompress = false; break;
     case 'Z': nocompress = true;  break;
@@ -1407,6 +1414,10 @@ int main (int argc, char* argv[])
     docResources.CMYKProfile = QPDFObjectHandle::newNull();
   }
 
+  // Predictor filter must be disabled if not compressed.
+  if (nocompress)
+      config.options.useFlatePredictorTIFF2 = false;
+
   // Main part
   for ( ;!error && optind < argc; optind++) {
     try
@@ -1417,6 +1428,22 @@ int main (int argc, char* argv[])
     {
       std::cerr << e.what() << std::endl;
       error_exit("Error occured while processing file(s). No output written.");
+    }
+  }
+
+  // Document Metadata
+  if (!xmpfile.empty()) {
+    if (config.PDF.version < "1.4") {
+      message_unavailable("Metadata", config.PDF.version, "1.4", "ignored");
+    } else {
+      QPDFObjectHandle catalog  = qpdf.getRoot();
+      QPDFObjectHandle metadata = newStreamFromFile(qpdf, xmpfile);
+      if (metadata.isStream()) {
+        QPDFObjectHandle dict = metadata.getDict();
+        dict.replaceKey("/Type", QPDFObjectHandle::newName("/Metadata"));
+        dict.replaceKey("/Subtype", QPDFObjectHandle::newName("/XML"));
+        catalog.replaceKey("/Metadata", qpdf.makeIndirectObject(metadata));
+      }
     }
   }
 
@@ -1495,10 +1522,6 @@ int main (int argc, char* argv[])
       }
     }
   }
-
-  // Predictor filter must be disabled if not compressed.
-  if (nocompress)
-      config.options.useFlatePredictorTIFF2 = false;
 
   // Set PDF version
   if (config.PDF.autoIncrementVersion)
