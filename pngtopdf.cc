@@ -152,6 +152,8 @@ static QPDFObjectHandle create_colorspace_Indexed (const PNGImage& src,
                                                    QPDF& qpdf);
 static QPDFObjectHandle create_colorspace         (const PNGImage& src,
                                                    QPDF& qpdf);
+static QPDFObjectHandle create_base_colorspace    (const PNGImage& src,
+                                                   QPDF &qpdf);
 
 static std::pair<std::string, std::string> strip_soft_mask(const PNGImage& src);
 static std::string create_soft_mask(const PNGImage& src);
@@ -169,7 +171,7 @@ newStreamFromFile (QPDF& qpdf, const std::string filename)
 
 // TODO: Cache profile
 static cmsHTRANSFORM
-setup_transform (const PNGImage& src)
+setup_ICCP_transform (const PNGImage& src)
 {
   cmsHTRANSFORM hTransform = NULL;
 
@@ -309,7 +311,6 @@ create_colorspace_ICCBased (const PNGImage& src, QPDF& qpdf)
   const std::string profile = std::string(src.getICCProfile().begin(),
                                           src.getICCProfile().end());
   QPDFObjectHandle  colorspace;
-
   if (profile.size() == 0)
     colorspace = QPDFObjectHandle::newNull();
   else {
@@ -537,6 +538,31 @@ make_param_Cal (bool isRGB,
   return  cal_param;
 }
 
+// Base ColorSpace for Indexed color.
+static QPDFObjectHandle
+create_base_colorspace (const PNGImage& src, QPDF &qpdf)
+{
+  QPDFObjectHandle colorspace;
+
+  switch (src.getCalibrationType()) {
+  case calibration_profile:
+    colorspace = create_colorspace_ICCBased(src, qpdf);
+    break;
+  case calibration_srgb:
+    colorspace = create_colorspace_sRGB(src);
+    break;
+  case calibration_matrix:
+    colorspace = create_colorspace_CalRGB(src);
+    break;
+  case calibration_none:
+  default:
+    colorspace = QPDFObjectHandle::newName("/DeviceRGB");
+  break;
+  }
+
+  return  colorspace;
+}
+
 static QPDFObjectHandle
 create_colorspace_Indexed (const PNGImage& src, QPDF& qpdf)
 {
@@ -551,9 +577,9 @@ create_colorspace_Indexed (const PNGImage& src, QPDF& qpdf)
   QPDFObjectHandle colorspace = QPDFObjectHandle::newArray();
   colorspace.appendItem(QPDFObjectHandle::newName("/Indexed"));
   if (config.colorManagement.convertToCMYK) {
-    cmsHTRANSFORM hTransform = setup_transform(src);
+    cmsHTRANSFORM hTransform = setup_ICCP_transform(src);
     if (!hTransform)
-      base = QPDFObjectHandle::newName("/DeviceRGB");
+      base = create_base_colorspace(src, qpdf);
     else {
       size_t data_size = 4 * palette.size();
       char  *buffer    = new char[data_size];
@@ -564,7 +590,7 @@ create_colorspace_Indexed (const PNGImage& src, QPDF& qpdf)
       base = QPDFObjectHandle::newName("/DeviceCMYK");
     }
   } else {
-    base = QPDFObjectHandle::newName("/DeviceRGB");
+    base = create_base_colorspace(src, qpdf);
   }
   colorspace.appendItem(base);
   colorspace.appendItem(QPDFObjectHandle::newInteger(palette.size()-1));
@@ -584,9 +610,6 @@ create_colorspace (const PNGImage& src, QPDF &qpdf)
     break;
   case calibration_srgb:
     colorspace = create_colorspace_sRGB(src);
-    {
-      std::string intent = src.getsRGBIntent();
-    }
     break;
   case calibration_matrix:
     if (src.getNComps() >= 3)
@@ -628,6 +651,7 @@ create_soft_mask (const PNGImage& src)
 {
   assert( src.hasPalette() );
 
+  // Always 1 channel-8 bpc here.
   int32_t     num_pixel = src.getWidth() * src.getHeight();
   std::string smask(num_pixel, 0xff);
   std::vector<Color> palette = src.getPalette();
@@ -636,7 +660,7 @@ create_soft_mask (const PNGImage& src)
     for (int32_t i = 0; i < src.getWidth(); i++) {
       uint8_t n = round(255 * (src.getPixel(i, j).v[0] / 65535.)); // FIXME
       smask[src.getWidth() * j + i] =
-        (n < palette.size()) ? round(255 * (palette[n].v[4] / 65535.)) : 0xffu;
+        (n < palette.size()) ? round(255 * (palette[n].v[3] / 65535.)) : 0xffu;
     }
   }
 
@@ -722,44 +746,113 @@ strip_soft_mask (const PNGImage& src)
   return  std::make_pair(raster, smask);
 }
 
+// Many PDF viewers have broken TIFF 2 predictor support?
+// Ony GhostScript and MuPDF render 4bpc grayscale image with TIFF 2 predictor
+// filter applied correctly.
+//
+//  Acrobat Reader DC  2015.007.20033  NG
+//  Adobe Acrobat X    10.1.13         NG
+//  Foxit Reader       4.1.5.425       NG
+//  GhostScript        9.16            OK
+//  SumatraPDF(MuPDF)  v3.0            OK
+//  Evince(poppler)    2.32.0.145      NG (1bit and 4bit broken)
+//
+void
+filter_tiff2_1_2_4 (std::string& raster,
+                    int32_t width, int32_t height, int8_t bpc, int8_t num_comp)
+{
+  assert( bpc > 0 && bpc <= 8 );
+
+  int32_t  rowbytes = (bpc * num_comp * width + 7) / 8;
+  uint8_t  mask     = (1 << bpc) - 1;
+  std::vector<uint8_t> prev(num_comp);
+
+  // Generic routine for 1 to 16 bit.
+  // It supports, e.g., 7 bpc images too.
+  // It's not necessary to have 16bit inbuf and outbuf
+  // since we only need 1, 2, and 4 bit support here.
+  for (int j = 0; j < height; j++) {
+    int32_t  k, l, inbits, outbits;
+    uint16_t inbuf, outbuf;
+
+    std::fill(prev.begin(), prev.end(), 0);
+    inbuf = outbuf = 0; inbits = outbits = 0;
+    l = k = j * rowbytes;
+    for (int i = 0; i < width; i++) {
+      for (int c = 0; c < num_comp; c++) {
+        if (inbits < bpc) { // need more byte
+          inbuf   = (inbuf << 8) | raster[l]; l++;
+          inbits += 8;
+        }
+        uint8_t cur = (inbuf >> (inbits - bpc)) & mask;
+        inbits -= bpc; // consumed bpc bits
+        int8_t  sub = cur - prev[c];
+        prev[c] = cur;
+        if (sub < 0)
+          sub += (1 << bpc);
+        // Append newly filtered component value
+        outbuf   = (outbuf << bpc) | sub;
+        outbits += bpc;
+        // flush
+        if (outbits >= 8) {
+          raster[k] = (outbuf >> (outbits - 8)); k++;
+          outbits  -= 8;
+        }
+      }
+    }
+    if (outbits > 0)
+      raster[k] = (outbuf << (8 - outbits)); k++;
+  }
+}
+
 // Returns DecodeParms dictionary
 // NOTICE: "raster" modified.
 QPDFObjectHandle
 apply_tiff2_filter (std::string& raster,
                     int32_t width, int32_t height, int8_t bpc, int8_t num_comp)
 {
-  if (bpc < 8 || num_comp > 4)
+  std::vector<uint16_t> prev(num_comp);
+
+  if (num_comp > 4)
     return QPDFObjectHandle::newNull(); // Not supported yet
 
-  for (int32_t j = 0; j < height; j++) {
-    uint16_t prev[4] = {0, 0, 0, 0};
-    for (int32_t i = 0; i < width; i++) {
-      int32_t pos = (bpc / 8) * num_comp * (width * j + i);
-      for (int c = 0; c < num_comp; c++) {
-        switch (bpc) {
-        case 8:
-          {
-            uint8_t cur   = raster[pos+c];
-            int32_t sub   = cur - prev[c];
-            prev[c]       = cur;
-            raster[pos+c] = sub;
-          }
-          break;
+  switch (bpc) {
+  case 1: case 2: case 4:
+    filter_tiff2_1_2_4(raster, width, height, bpc, num_comp);
+    break;
 
-
-        case 16:
-          {
-            uint16_t cur = ((uint8_t)raster[pos+2*c])*256 +
-                             (uint8_t)raster[pos+2*c+1];
-            uint16_t sub  = cur - prev[c];
-            prev[c]       = cur;
-            raster[pos+2*c  ] = (sub >> 8) & 0xff;
-            raster[pos+2*c+1] = sub & 0xff;
-          }
-          break;
+  case 8:
+    for (int32_t j = 0; j < height; j++) {
+      std::fill(prev.begin(), prev.end(), 0);
+      for (int32_t i = 0; i < width; i++) {
+        int32_t pos = num_comp * (width * j + i);
+        for (int c = 0; c < num_comp; c++) {
+          uint8_t cur   = raster[pos+c];
+          int32_t sub   = cur - prev[c];
+          prev[c]       = cur;
+          raster[pos+c] = sub;
         }
       }
     }
+    break;
+
+  case 16:
+    for (int32_t j = 0; j < height; j++) {
+      std::fill(prev.begin(), prev.end(), 0);
+      for (int32_t i = 0; i < width; i++) {
+        int32_t pos = 2 * num_comp * (width * j + i);
+        for (int c = 0; c < num_comp; c++) {
+          uint16_t cur = ((uint8_t)raster[pos+2*c])*256 +
+                           (uint8_t)raster[pos+2*c+1];
+          uint16_t sub  = cur - prev[c];
+          prev[c]       = cur;
+          raster[pos+2*c  ] = (sub >> 8) & 0xff;
+          raster[pos+2*c+1] = sub & 0xff;
+        }
+      }
+    }
+    break;
+
   }
   QPDFObjectHandle parms = QPDFObjectHandle::newDictionary();
   parms.replaceKey("/BitsPerComponent",
@@ -796,6 +889,7 @@ png_include_image (QPDF& qpdf, const std::string filename, const Margins margin)
       !config.PDF.autoIncrementVersion )
     png_load_options |= PNGImage::eLoadOptionPrecomposeAlpha;
 
+
   // Load PNG image. Object is invalid when opening file failed.
   PNGImage src(filename, png_load_options);
   if (!src.valid())
@@ -826,7 +920,7 @@ png_include_image (QPDF& qpdf, const std::string filename, const Margins margin)
   // From here we do not use raster image data in PDFImage object "src".
   // We use "src" object only for obtaining color and image information.
   if (config.colorManagement.convertToCMYK && src.getNComps() == 3) {
-    cmsHTRANSFORM hTransform = setup_transform(src);
+    cmsHTRANSFORM hTransform = setup_ICCP_transform(src);
     if (hTransform) {
       size_t num_pixel = src.getWidth() * src.getHeight();
       size_t data_size = (src.getBPC() / 8) * 4 * num_pixel;
@@ -939,7 +1033,7 @@ png_include_image (QPDF& qpdf, const std::string filename, const Margins margin)
       Color color = src.getMaskColor();
       // Color-key must be transformed to CMYK too.
       if (config.colorManagement.convertToCMYK && src.getNComps() == 3) {
-        cmsHTRANSFORM hTransform = setup_transform(src);
+        cmsHTRANSFORM hTransform = setup_ICCP_transform(src);
         if (hTransform) {
           char inbuf[3], outbuf[4];
           inbuf[0] = color.v[0]; // TODO: implement operator=
@@ -988,12 +1082,10 @@ png_include_image (QPDF& qpdf, const std::string filename, const Margins margin)
       QPDFObjectHandle parms = QPDFObjectHandle::newNull();
       // Maybe apprication of predictor filter is unnecessary.
       if (config.options.useFlatePredictorTIFF2) {
-        if (src.getBPC() >= 8) {
-          parms = apply_tiff2_filter(raster_mask,
-                                     src.getWidth(), src.getHeight(),
-                                     src.getBPC(), 1);
-          dict.replaceKey("/DecodeParms", parms);
-        }
+        parms = apply_tiff2_filter(raster_mask,
+                                   src.getWidth(), src.getHeight(),
+                                   src.getBPC(), 1);
+        dict.replaceKey("/DecodeParms", parms);
       }
       smask.replaceStreamData(raster_mask,
                               QPDFObjectHandle::newNull(), parms);
@@ -1006,16 +1098,15 @@ png_include_image (QPDF& qpdf, const std::string filename, const Margins margin)
   // With strip_soft_mask() getNComps() no longer represents correct value
   // for raster image data. Don't forget that CMYK conversion also modifies
   // actual NComps.
+  int NComps = use_cmyk ? 4 :
+               (has_smask ? src.getNComps() - 1 : src.getNComps()); // Ugh
   QPDFObjectHandle parms = QPDFObjectHandle::newNull();
   if (config.options.useFlatePredictorTIFF2) {
-    int NComps =
-     use_cmyk ? 4 :
-                 (has_smask ? src.getNComps() - 1 : src.getNComps()); // Ugh
-    if (src.getBPC() >= 8 && src.getNComps() <= 4) {
+    if (NComps <= 4) {
       parms = apply_tiff2_filter(raster,
                                  src.getWidth(), src.getHeight(),
                                  src.getBPC(), NComps);
-      image_dict.replaceKey("/DecodeParme", parms);
+      image_dict.replaceKey("/DecodeParms", parms);
     }
   }
   image.replaceStreamData(raster,
