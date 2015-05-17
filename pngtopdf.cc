@@ -33,14 +33,8 @@
 
 #include "Image.hh"
 #include "PNGImage.hh"
-
-// TODO: Need ColorSpace class
-enum eRenderingIntent {
-  eRenderingIntentPerceptual = 0,
-  eRenderingIntentRelativeColorimetric = 1,
-  eRenderingIntentSaturation = 2,
-  eRenderingIntentAbsoluteColorimetric = 3
-};
+#include "ColorSpace.hh"
+#include "TIFFFilter.hh"
 
 // TODO: Using struct may increase maintainace cost...
 static struct
@@ -137,20 +131,7 @@ static struct
   QPDFObjectHandle CMYKProfile; // Indirect object
 } docResources;
 
-static QPDFObjectHandle make_param_Cal (bool isRGB,
-                                        double G, /* Gamma */
-                                        double xw, double yw,
-                                        double xr, double yr,
-                                        double xg, double yg,
-                                        double xb, double yb);
-static QPDFObjectHandle create_colorspace_CalRGB  (const PNGImage& src);
-static QPDFObjectHandle create_colorspace_CalGray (const PNGImage& src);
-static QPDFObjectHandle create_colorspace_ICCBased(const PNGImage& src,
-                                                   QPDF& qpdf);
-static QPDFObjectHandle create_colorspace_sRGB    (const PNGImage& src);
 static QPDFObjectHandle create_colorspace_Indexed (const PNGImage& src,
-                                                   QPDF& qpdf);
-static QPDFObjectHandle create_colorspace         (const PNGImage& src,
                                                    QPDF& qpdf);
 static QPDFObjectHandle create_base_colorspace    (const PNGImage& src,
                                                    QPDF &qpdf);
@@ -271,273 +252,6 @@ setup_ICCP_transform (const PNGImage& src)
   return  hTransform;
 }
 
-// Approximated sRGB
-static QPDFObjectHandle
-create_colorspace_sRGB (const PNGImage& src)
-{
-  QPDFObjectHandle colorspace;
-  QPDFObjectHandle cal_param;
-  bool             isRGB = false;
-
-  assert( src.getCalibrationType() == calibration_srgb );
-
-  isRGB = (src.getNComps() >= 3 || src.hasPalette()) ? true : false;
-
-  // Parameters taken from PNG spec. section 4.2.2.3.
-  cal_param = make_param_Cal(isRGB,
-                             2.2,
-                             0.3127, 0.329,
-                             0.64, 0.33, 0.3, 0.6, 0.15, 0.06);
-  if (cal_param.isNull())
-    return QPDFObjectHandle::newNull();
-
-  colorspace = QPDFObjectHandle::newArray();
-  if (isRGB) {
-    colorspace.appendItem(QPDFObjectHandle::newName("/CalRGB"));
-  } else {
-    colorspace.appendItem(QPDFObjectHandle::newName("/CalGray"));
-  }
-  colorspace.appendItem(cal_param);
-
-  return  colorspace;
-}
-
-static QPDFObjectHandle
-create_colorspace_ICCBased (const PNGImage& src, QPDF& qpdf)
-{
-  assert( src.getCalibrationType() == calibration_profile );
-
-  int num_comp = src.hasPalette() ? 3 : src.getNComps();
-  const std::string profile = std::string(src.getICCProfile().begin(),
-                                          src.getICCProfile().end());
-  QPDFObjectHandle  colorspace;
-  if (profile.size() == 0)
-    colorspace = QPDFObjectHandle::newNull();
-  else {
-    QPDFObjectHandle iccp = QPDFObjectHandle::newStream(&qpdf, profile);
-    QPDFObjectHandle dict = iccp.getDict();
-    dict.replaceKey("/N", QPDFObjectHandle::newInteger(num_comp));
-    colorspace = QPDFObjectHandle::newArray();
-    colorspace.appendItem(QPDFObjectHandle::newName("/ICCBased"));
-    colorspace.appendItem(qpdf.makeIndirectObject(iccp));
-  }
-
-  return  colorspace;
-}
-
-// gAMA, cHRM:
-//
-//   If cHRM is present, we use CIE-Based color space. gAMA is also used here
-//   if available.
-#define INVALID_CHRM_VALUE(xw,yw,xr,yr,xg,yg,xb,yb) (\
-  (xw) <= 0.0 || (yw) < 1.0e-10 || \
-  (xr) < 0.0  || (yr) < 0.0 || (xg) < 0.0 || (yg) < 0.0 || \
-  (xb) < 0.0  || (yb) < 0.0)
-
-static QPDFObjectHandle
-create_colorspace_CalRGB (const PNGImage& src)
-{
-  QPDFObjectHandle colorspace;
-  QPDFObjectHandle cal_param;
-  double  xw, yw, xr, yr, xg, yg, xb, yb;
-  double  G;
-
-  assert( src.getCalibrationType() == calibration_matrix );
-
-  std::vector<float> v = src.getChromaticity();
-  xw = v[0]; yw = v[1]; xr = v[2]; yr = v[3];
-  xg = v[4]; yg = v[5]; xb = v[6]; yb = v[7];
-
-  if (xw <= 0.0 || yw < 1.0e-10 ||
-      xr < 0.0  || yr < 0.0 || xg < 0.0 || yg < 0.0 || xb < 0.0 || yb < 0.0) {
-    std::cerr << "Invalid cHRM chunk parameters found." << std::endl;
-    return  QPDFObjectHandle::newNull();
-  }
-
-  if (src.hasGamma()) {
-    G = src.getGamma();
-    if (G < 1.0e-2) {
-      std::cerr << "Unusual Gamma value: 1.0 / " << G << std::endl;
-      return QPDFObjectHandle::newNull();
-    }
-  } else {
-  // Adobe PhotoShop CC assumes gAMA value of 2.2 to be used if
-  // gAMA chunk does not exist?
-#ifdef USE_DEFAULT_GAMMA_22
-    G = 2.2;
-#else
-    G = 1.0;
-#endif
-  }
-
-  cal_param = make_param_Cal(true, // isRGB
-                             G, xw, yw, xr, yr, xg, yg, xb, yb);
-
-  if (cal_param.isNull())
-    return QPDFObjectHandle::newNull();
-
-  colorspace = QPDFObjectHandle::newArray();
-  colorspace.appendItem(QPDFObjectHandle::newName("/CalRGB")),
-  colorspace.appendItem(cal_param);
-
-  return  colorspace;
-}
-
-static QPDFObjectHandle
-create_colorspace_CalGray (const PNGImage& src)
-{
-  QPDFObjectHandle colorspace;
-  QPDFObjectHandle cal_param;
-  double  xw, yw, xr, yr, xg, yg, xb, yb;
-  double  G;
-
-  std::vector<float> v = src.getChromaticity();
-  xw = v[0]; yw = v[1]; xr = v[2]; yr = v[3];
-  xg = v[4]; yg = v[5]; xb = v[6]; yb = v[7];
-
-  if (xw <= 0.0 || yw < 1.0e-10 ||
-      xr < 0.0  || yr < 0.0 || xg < 0.0 || yg < 0.0 || xb < 0.0 || yb < 0.0) {
-    std::cerr << "Invalid cHRM chunk parameters found." << std::endl;
-    return  QPDFObjectHandle::newNull();
-  }
-
-  if (src.hasGamma()) {
-    G = src.getGamma();
-    if (G < 1.0e-2) {
-      std::cerr << "Unusual Gamma value: 1.0 / " << G << std::endl;
-      return  QPDFObjectHandle::newNull();
-    }
-  } else {
-#ifdef USE_DEFAULT_GAMMA_22
-    G = 2.2;
-#else
-    G = 1.0;
-#endif
-  }
-
-  cal_param = make_param_Cal(false, // isRGB
-                             G, xw, yw, xr, yr, xg, yg, xb, yb);
-
-  if (cal_param.isNull())
-    return  QPDFObjectHandle::newNull();
-
-  colorspace = QPDFObjectHandle::newArray();
-  colorspace.appendItem(QPDFObjectHandle::newName("/CalGray"));
-  colorspace.appendItem(cal_param);
-
-  return  colorspace;
-}
-
-static QPDFObjectHandle
-make_param_Cal (bool isRGB,
-                double G, /* Gamma */
-                double xw, double yw,
-                double xr, double yr, double xg, double yg, double xb, double yb)
-{
-  QPDFObjectHandle cal_param;
-  QPDFObjectHandle white_point, matrix, dev_gamma;
-  double Xw, Yw, Zw; /* Yw = 1.0 */
-  double Xr, Xg, Xb, Yr, Yb, Yg, Zr, Zg, Zb;
-
-#if 1
-   // Conversion found in
-   //
-   //  com.sixlegs.image.png - Java package to read and display PNG images
-   //  Copyright (C) 1998, 1999, 2001 Chris Nokleberg
-   //
-   //  http://www.sixlegs.com/software/png/
-   //
-  {
-    double zw, zr, zg, zb;
-    double fr, fg, fb;
-    double det;
-
-    // WhitePoint
-    zw = 1 - (xw + yw);
-    zr = 1 - (xr + yr); zg = 1 - (xg + yg); zb = 1 - (xb + yb);
-    Xw = xw / yw; Yw = 1.0; Zw = zw / yw;
-
-    // Matrix
-    det = xr * (yg * zb - zg * yb) -
-          xg * (yr * zb - zr * yb) + xb * (yr * zg - zr * yg);
-    if (fabs(det) < 1.0e-10) {
-      std::cerr << "Non invertible matrix: "
-                   "Maybe invalid value(s) specified in cHRM chunk." <<
-                   std::endl;
-      return  QPDFObjectHandle::newNull();
-    }
-    fr  = (Xw * (yg * zb - zg * yb) -
-           xg * (zb - Zw * yb) + xb * (zg - Zw * yg)) / det;
-    fg  = (xr * (zb - Zw * yb) -
-           Xw * (yr * zb - zr * yb) + xb * (yr * Zw - zr)) / det;
-    fb  = (xr * (yg * Zw - zg) -
-           xg * (yr * Zw - zr) + Xw * (yr * zg - zr * yg)) / det;
-    Xr = fr * xr; Yr = fr * yr; Zr = fr * zr;
-    Xg = fg * xg; Yg = fg * yg; Zg = fg * zg;
-    Xb = fb * xb; Yb = fb * yb; Zb = fb * zb;
-  }
-#else
-  {
-    double z = yw * ((xg - xb) * yr - (xr - xb) * yg + (xr - xg) * yb);
-    Yr = yr * ((xg - xb) * yw - (xw - xb) * yg + (xw - xg) * yb) / z;
-    Xr = Yr * xr / yr;
-    Zr = Yr * ((1. - xr) / yr - 1.);
-    Yg = -yg * ((xr - xb) * yw - (xw - xb) * yr + (xw - xr) * yb) / z;
-    Xg = Yg * xg / yg;
-    Zg = Yg * ((1. - xg) / yg - 1.);
-    Yb = yb * ((xr - xg) * yw - (xw - xg) * yw + (xw - xr) * yg) / z;
-    Xb = Yb * xb / yb;
-    Zb = Yb * ((1. - xb) / yb - 1.);
-    Xw = Xr + Xg + Xb;
-    Yw = 1.0;
-    Zw = Zr + Zg + Zb;
-  }
-#endif
-
-  if (G < 1.0e-2) {
-    std::cerr << "Unusual Gamma specified: 1.0 / " << G << std::endl;
-    return  QPDFObjectHandle::newNull();
-  }
-
-  cal_param = QPDFObjectHandle::newDictionary();
-
-  // White point is always required.
-  white_point = QPDFObjectHandle::newArray();
-  white_point.appendItem(QPDFObjectHandle::newReal(Xw));
-  white_point.appendItem(QPDFObjectHandle::newReal(Yw));
-  white_point.appendItem(QPDFObjectHandle::newReal(Zw));
-  cal_param.replaceKey("/WhitePoint", white_point);
-
-  // Matrix - default: Identity
-  if (isRGB) {
-    if (G != 1.0) {
-      dev_gamma = QPDFObjectHandle::newArray();
-      dev_gamma.appendItem(QPDFObjectHandle::newReal(G));
-      dev_gamma.appendItem(QPDFObjectHandle::newReal(G));
-      dev_gamma.appendItem(QPDFObjectHandle::newReal(G));
-      cal_param.replaceKey("/Gamma", dev_gamma);
-    }
-
-    matrix = QPDFObjectHandle::newArray();
-    matrix.appendItem(QPDFObjectHandle::newReal(Xr));
-    matrix.appendItem(QPDFObjectHandle::newReal(Yr));
-    matrix.appendItem(QPDFObjectHandle::newReal(Zr));
-    matrix.appendItem(QPDFObjectHandle::newReal(Xg));
-    matrix.appendItem(QPDFObjectHandle::newReal(Yg));
-    matrix.appendItem(QPDFObjectHandle::newReal(Zg));
-    matrix.appendItem(QPDFObjectHandle::newReal(Xb));
-    matrix.appendItem(QPDFObjectHandle::newReal(Yb));
-    matrix.appendItem(QPDFObjectHandle::newReal(Zb));
-    cal_param.replaceKey("/Matrix", matrix);
-  } else { // Gray
-    if (G != 1.0)
-      cal_param.replaceKey("/Gamma",
-		                       QPDFObjectHandle::newReal(G));
-  }
-
-  return  cal_param;
-}
-
 // Base ColorSpace for Indexed color.
 static QPDFObjectHandle
 create_base_colorspace (const PNGImage& src, QPDF &qpdf)
@@ -546,13 +260,13 @@ create_base_colorspace (const PNGImage& src, QPDF &qpdf)
 
   switch (src.getCalibrationType()) {
   case calibration_profile:
-    colorspace = create_colorspace_ICCBased(src, qpdf);
+    colorspace = ColorSpace::createICCBasedObject(src, qpdf);
     break;
   case calibration_srgb:
-    colorspace = create_colorspace_sRGB(src);
+    colorspace = ColorSpace::createsRGBObject(src);
     break;
   case calibration_matrix:
-    colorspace = create_colorspace_CalRGB(src);
+    colorspace = ColorSpace::createCalRGBObject(src);
     break;
   case calibration_none:
   default:
@@ -597,40 +311,6 @@ create_colorspace_Indexed (const PNGImage& src, QPDF& qpdf)
   colorspace.appendItem(QPDFObjectHandle::newString(lookup));
 
   return colorspace;
-}
-
-static QPDFObjectHandle
-create_colorspace (const PNGImage& src, QPDF &qpdf)
-{
-  QPDFObjectHandle colorspace;
-
-  switch (src.getCalibrationType()) {
-  case calibration_profile:
-    colorspace = create_colorspace_ICCBased(src, qpdf);
-    break;
-  case calibration_srgb:
-    colorspace = create_colorspace_sRGB(src);
-    break;
-  case calibration_matrix:
-    if (src.getNComps() >= 3)
-      colorspace = create_colorspace_CalRGB(src);
-    else
-      colorspace = create_colorspace_CalGray(src);
-    break;
-  case calibration_none:
-  default:
-    switch (src.getNComps()) {
-    case 3: case 4:
-      colorspace = QPDFObjectHandle::newName("/DeviceRGB");
-      break;
-    case 1: case 2:
-      colorspace = QPDFObjectHandle::newName("/DeviceGray");
-      break;
-    }
-  break;
-  }
-
-  return  colorspace;
 }
 
 static bool
@@ -744,127 +424,6 @@ strip_soft_mask (const PNGImage& src)
   delete image_data_ptr;
 
   return  std::make_pair(raster, smask);
-}
-
-// Many PDF viewers have broken TIFF 2 predictor support?
-// Ony GhostScript and MuPDF render 4bpc grayscale image with TIFF 2 predictor
-// filter applied correctly.
-//
-//  Acrobat Reader DC  2015.007.20033  NG
-//  Adobe Acrobat X    10.1.13         NG
-//  Foxit Reader       4.1.5.425       NG
-//  GhostScript        9.16            OK
-//  SumatraPDF(MuPDF)  v3.0            OK
-//  Evince(poppler)    2.32.0.145      NG (1bit and 4bit broken)
-//
-void
-filter_tiff2_1_2_4 (std::string& raster,
-                    int32_t width, int32_t height, int8_t bpc, int8_t num_comp)
-{
-  assert( bpc > 0 && bpc <= 8 );
-
-  int32_t  rowbytes = (bpc * num_comp * width + 7) / 8;
-  uint8_t  mask     = (1 << bpc) - 1;
-  std::vector<uint8_t> prev(num_comp);
-
-  // Generic routine for 1 to 16 bit.
-  // It supports, e.g., 7 bpc images too.
-  // It's not necessary to have 16bit inbuf and outbuf
-  // since we only need 1, 2, and 4 bit support here.
-  for (int j = 0; j < height; j++) {
-    int32_t  k, l, inbits, outbits;
-    uint16_t inbuf, outbuf;
-
-    std::fill(prev.begin(), prev.end(), 0);
-    inbuf = outbuf = 0; inbits = outbits = 0;
-    l = k = j * rowbytes;
-    for (int i = 0; i < width; i++) {
-      for (int c = 0; c < num_comp; c++) {
-        if (inbits < bpc) { // need more byte
-          inbuf   = (inbuf << 8) | raster[l]; l++;
-          inbits += 8;
-        }
-        uint8_t cur = (inbuf >> (inbits - bpc)) & mask;
-        inbits -= bpc; // consumed bpc bits
-        int8_t  sub = cur - prev[c];
-        prev[c] = cur;
-        if (sub < 0)
-          sub += (1 << bpc);
-        // Append newly filtered component value
-        outbuf   = (outbuf << bpc) | sub;
-        outbits += bpc;
-        // flush
-        if (outbits >= 8) {
-          raster[k] = (outbuf >> (outbits - 8)); k++;
-          outbits  -= 8;
-        }
-      }
-    }
-    if (outbits > 0)
-      raster[k] = (outbuf << (8 - outbits)); k++;
-  }
-}
-
-// Returns DecodeParms dictionary
-// NOTICE: "raster" modified.
-QPDFObjectHandle
-apply_tiff2_filter (std::string& raster,
-                    int32_t width, int32_t height, int8_t bpc, int8_t num_comp)
-{
-  std::vector<uint16_t> prev(num_comp);
-
-  if (num_comp > 4)
-    return QPDFObjectHandle::newNull(); // Not supported yet
-
-  switch (bpc) {
-  case 1: case 2: case 4:
-    filter_tiff2_1_2_4(raster, width, height, bpc, num_comp);
-    break;
-
-  case 8:
-    for (int32_t j = 0; j < height; j++) {
-      std::fill(prev.begin(), prev.end(), 0);
-      for (int32_t i = 0; i < width; i++) {
-        int32_t pos = num_comp * (width * j + i);
-        for (int c = 0; c < num_comp; c++) {
-          uint8_t cur   = raster[pos+c];
-          int32_t sub   = cur - prev[c];
-          prev[c]       = cur;
-          raster[pos+c] = sub;
-        }
-      }
-    }
-    break;
-
-  case 16:
-    for (int32_t j = 0; j < height; j++) {
-      std::fill(prev.begin(), prev.end(), 0);
-      for (int32_t i = 0; i < width; i++) {
-        int32_t pos = 2 * num_comp * (width * j + i);
-        for (int c = 0; c < num_comp; c++) {
-          uint16_t cur = ((uint8_t)raster[pos+2*c])*256 +
-                           (uint8_t)raster[pos+2*c+1];
-          uint16_t sub  = cur - prev[c];
-          prev[c]       = cur;
-          raster[pos+2*c  ] = (sub >> 8) & 0xff;
-          raster[pos+2*c+1] = sub & 0xff;
-        }
-      }
-    }
-    break;
-
-  }
-  QPDFObjectHandle parms = QPDFObjectHandle::newDictionary();
-  parms.replaceKey("/BitsPerComponent",
-                   QPDFObjectHandle::newInteger(bpc));
-  parms.replaceKey("/Colors",
-                   QPDFObjectHandle::newInteger(num_comp));
-  parms.replaceKey("/Columns",
-                   QPDFObjectHandle::newInteger(width));
-  parms.replaceKey("/Predictor",
-                    QPDFObjectHandle::newInteger(2));
-
-  return  parms;
 }
 
 // TODO: Rename it
@@ -981,7 +540,7 @@ png_include_image (QPDF& qpdf, const std::string filename, const Margins margin)
       has_smask = true;
     }
   } else {
-    colorspace = create_colorspace(src, qpdf);
+    colorspace = ColorSpace::createObject(src, qpdf);
   }
   image_dict.replaceKey("/ColorSpace", colorspace);
   // I do not understand it well though...
@@ -1082,7 +641,7 @@ png_include_image (QPDF& qpdf, const std::string filename, const Margins margin)
       QPDFObjectHandle parms = QPDFObjectHandle::newNull();
       // Maybe apprication of predictor filter is unnecessary.
       if (config.options.useFlatePredictorTIFF2) {
-        parms = apply_tiff2_filter(raster_mask,
+        parms = TIFFFilter::filter(raster_mask,
                                    src.getWidth(), src.getHeight(),
                                    src.getBPC(), 1);
         dict.replaceKey("/DecodeParms", parms);
@@ -1098,12 +657,18 @@ png_include_image (QPDF& qpdf, const std::string filename, const Margins margin)
   // With strip_soft_mask() getNComps() no longer represents correct value
   // for raster image data. Don't forget that CMYK conversion also modifies
   // actual NComps.
-  int NComps = use_cmyk ? 4 :
-               (has_smask ? src.getNComps() - 1 : src.getNComps()); // Ugh
+  int NComps;
+  if (use_cmyk)
+    NComps = 4;
+  else if (src.hasPalette())
+    NComps = 1;
+  else {
+    NComps = has_smask ? src.getNComps() - 1 : src.getNComps(); // Ugh
+  }
   QPDFObjectHandle parms = QPDFObjectHandle::newNull();
   if (config.options.useFlatePredictorTIFF2) {
     if (NComps <= 4) {
-      parms = apply_tiff2_filter(raster,
+      parms = TIFFFilter::filter(raster,
                                  src.getWidth(), src.getHeight(),
                                  src.getBPC(), NComps);
       image_dict.replaceKey("/DecodeParms", parms);

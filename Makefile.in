@@ -50,9 +50,9 @@ CONFIG_CLEAN_FILES =
 CONFIG_CLEAN_VPATH_FILES =
 am__installdirs = "$(DESTDIR)$(bindir)"
 PROGRAMS = $(bin_PROGRAMS)
-am_pngtopdf_OBJECTS = pngtopdf-Image.$(OBJEXT) \
-	pngtopdf-PNGImage.$(OBJEXT) pngtopdf-Resampler.$(OBJEXT) \
-	pngtopdf-pngtopdf.$(OBJEXT)
+am_pngtopdf_OBJECTS = pngtopdf-ColorSpace.$(OBJEXT) \
+	pngtopdf-Image.$(OBJEXT) pngtopdf-PNGImage.$(OBJEXT) \
+	pngtopdf-Resampler.$(OBJEXT) pngtopdf-pngtopdf.$(OBJEXT)
 pngtopdf_OBJECTS = $(am_pngtopdf_OBJECTS)
 pngtopdf_DEPENDENCIES =
 DEFAULT_INCLUDES = -I.@am__isrc@
@@ -169,7 +169,7 @@ target_alias = @target_alias@
 top_build_prefix = @top_build_prefix@
 top_builddir = @top_builddir@
 top_srcdir = @top_srcdir@
-pngtopdf_SOURCES = Image.cc PNGImage.cc Resampler.cc pngtopdf.cc
+pngtopdf_SOURCES = ColorSpace.cc Image.cc PNGImage.cc Resampler.cc pngtopdf.cc
 pngtopdf_LDADD = -lz -lpng -lqpdf
 pngtopdf_CFLAGS = -g -O2 -Wall
 pngtopdf_CPPFLAGS = -g -O2 -Wall
@@ -276,6 +276,7 @@ mostlyclean-compile:
 distclean-compile:
 	-rm -f *.tab.c
 
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/pngtopdf-ColorSpace.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/pngtopdf-Image.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/pngtopdf-PNGImage.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/pngtopdf-Resampler.Po@am__quote@
@@ -294,6 +295,20 @@ distclean-compile:
 @AMDEP_TRUE@@am__fastdepCXX_FALSE@	source='$<' object='$@' libtool=no @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCXX_FALSE@	DEPDIR=$(DEPDIR) $(CXXDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCXX_FALSE@	$(CXXCOMPILE) -c -o $@ `$(CYGPATH_W) '$<'`
+
+pngtopdf-ColorSpace.o: ColorSpace.cc
+@am__fastdepCXX_TRUE@	$(CXX) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(pngtopdf_CPPFLAGS) $(CPPFLAGS) $(AM_CXXFLAGS) $(CXXFLAGS) -MT pngtopdf-ColorSpace.o -MD -MP -MF $(DEPDIR)/pngtopdf-ColorSpace.Tpo -c -o pngtopdf-ColorSpace.o `test -f 'ColorSpace.cc' || echo '$(srcdir)/'`ColorSpace.cc
+@am__fastdepCXX_TRUE@	$(am__mv) $(DEPDIR)/pngtopdf-ColorSpace.Tpo $(DEPDIR)/pngtopdf-ColorSpace.Po
+@AMDEP_TRUE@@am__fastdepCXX_FALSE@	source='ColorSpace.cc' object='pngtopdf-ColorSpace.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCXX_FALSE@	DEPDIR=$(DEPDIR) $(CXXDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCXX_FALSE@	$(CXX) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(pngtopdf_CPPFLAGS) $(CPPFLAGS) $(AM_CXXFLAGS) $(CXXFLAGS) -c -o pngtopdf-ColorSpace.o `test -f 'ColorSpace.cc' || echo '$(srcdir)/'`ColorSpace.cc
+
+pngtopdf-ColorSpace.obj: ColorSpace.cc
+@am__fastdepCXX_TRUE@	$(CXX) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(pngtopdf_CPPFLAGS) $(CPPFLAGS) $(AM_CXXFLAGS) $(CXXFLAGS) -MT pngtopdf-ColorSpace.obj -MD -MP -MF $(DEPDIR)/pngtopdf-ColorSpace.Tpo -c -o pngtopdf-ColorSpace.obj `if test -f 'ColorSpace.cc'; then $(CYGPATH_W) 'ColorSpace.cc'; else $(CYGPATH_W) '$(srcdir)/ColorSpace.cc'; fi`
+@am__fastdepCXX_TRUE@	$(am__mv) $(DEPDIR)/pngtopdf-ColorSpace.Tpo $(DEPDIR)/pngtopdf-ColorSpace.Po
+@AMDEP_TRUE@@am__fastdepCXX_FALSE@	source='ColorSpace.cc' object='pngtopdf-ColorSpace.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCXX_FALSE@	DEPDIR=$(DEPDIR) $(CXXDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCXX_FALSE@	$(CXX) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(pngtopdf_CPPFLAGS) $(CPPFLAGS) $(AM_CXXFLAGS) $(CXXFLAGS) -c -o pngtopdf-ColorSpace.obj `if test -f 'ColorSpace.cc'; then $(CYGPATH_W) 'ColorSpace.cc'; else $(CYGPATH_W) '$(srcdir)/ColorSpace.cc'; fi`
 
 pngtopdf-Image.o: Image.cc
 @am__fastdepCXX_TRUE@	$(CXX) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(pngtopdf_CPPFLAGS) $(CPPFLAGS) $(AM_CXXFLAGS) $(CXXFLAGS) -MT pngtopdf-Image.o -MD -MP -MF $(DEPDIR)/pngtopdf-Image.Tpo -c -o pngtopdf-Image.o `test -f 'Image.cc' || echo '$(srcdir)/'`Image.cc
