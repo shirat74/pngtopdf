@@ -21,7 +21,7 @@ Options:
     -m dimensions set margins (0 0 0 0)
 
     -e, -E        enable/disable encryption (disabled)
-    -c, -C        enable/disable CMYK conversion (disabled)
+    -c, -C        enable/disable RGB to CMYK conversion (disabled)
     -f, -F        enable/disable use of Flate predictor (disabled)
     -g, -G        enable/disable gamma pre-compensation (enabled)
     -l, -L        enable/disable Linearization (disabled)
