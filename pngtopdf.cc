@@ -478,7 +478,8 @@ png_include_image (QPDF& qpdf, const std::string filename, const Margins margin)
 
   // From here we do not use raster image data in PDFImage object "src".
   // We use "src" object only for obtaining color and image information.
-  if (config.colorManagement.convertToCMYK && src.getNComps() == 3) {
+  if (config.colorManagement.convertToCMYK &&
+      (src.getNComps() == 3 || src.getNComps() == 4)) {
     cmsHTRANSFORM hTransform = setup_ICCP_transform(src);
     if (hTransform) {
       size_t num_pixel = src.getWidth() * src.getHeight();
